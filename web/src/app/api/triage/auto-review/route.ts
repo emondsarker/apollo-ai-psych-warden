@@ -20,8 +20,8 @@ import {
   finalizeAiReview,
   runDirectorReview,
   runPeerReview,
-  type PeerDecision,
   type DirectorDecision,
+  type PeerDecision,
 } from "@/lib/peer-agents";
 import {
   TriageThreadSchema,
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
           // ── Critical bypass — director reads it cold ──
           if (severity >= 4) {
             send({ type: "phase", peerId: "elena", role: "director", reason: "critical" });
-            const directorDecision = await runDirectorReview(
+            const directorRes = await runDirectorReview(
               input.thread,
               input.results,
               null,
@@ -79,35 +79,42 @@ export async function POST(req: NextRequest) {
               type: "decision",
               peerId: "elena",
               role: "director",
-              decision: directorDecision,
+              decision: directorRes.decision,
+              via: directorRes.via,
+              sessionId: directorRes.sessionId,
             });
-            const review = finalizeAiReview(input.assignedTo, makePassthrough(directorDecision), {
-              decision: directorDecision,
-              peerId: "elena",
-            });
-            send({ type: "reviewed", review });
+            const review = finalizeAiReview(
+              input.assignedTo,
+              makePassthrough(directorRes.decision),
+              { decision: directorRes.decision, peerId: "elena" },
+              { via: directorRes.via, directorSessionId: directorRes.sessionId },
+            );
+            send({ type: "reviewed", review, via: directorRes.via });
             return;
           }
 
           // ── Junior review ──
           send({ type: "phase", peerId: input.assignedTo, role: "junior" });
-          const junior: PeerDecision = await runPeerReview(
+          const juniorRes = await runPeerReview(
             input.assignedTo,
             input.thread,
             input.results,
             { onAttempt: onAttempt(input.assignedTo) },
           );
+          const junior: PeerDecision = juniorRes.decision;
           send({
             type: "decision",
             peerId: input.assignedTo,
             role: "junior",
             decision: junior,
+            via: juniorRes.via,
+            sessionId: juniorRes.sessionId,
           });
 
           // ── Optional director ──
           if (junior.decision === "escalated") {
             send({ type: "phase", peerId: "elena", role: "director", reason: "escalation" });
-            const directorDecision = await runDirectorReview(
+            const directorRes = await runDirectorReview(
               input.thread,
               input.results,
               { peerId: input.assignedTo, decision: junior },
@@ -117,18 +124,29 @@ export async function POST(req: NextRequest) {
               type: "decision",
               peerId: "elena",
               role: "director",
-              decision: directorDecision,
+              decision: directorRes.decision,
+              via: directorRes.via,
+              sessionId: directorRes.sessionId,
             });
-            const review = finalizeAiReview(input.assignedTo, junior, {
-              decision: directorDecision,
-              peerId: "elena",
-            });
-            send({ type: "reviewed", review });
+            const review = finalizeAiReview(
+              input.assignedTo,
+              junior,
+              { decision: directorRes.decision, peerId: "elena" },
+              {
+                via: directorRes.via,
+                juniorSessionId: juniorRes.sessionId,
+                directorSessionId: directorRes.sessionId,
+              },
+            );
+            send({ type: "reviewed", review, via: directorRes.via });
             return;
           }
 
-          const review = finalizeAiReview(input.assignedTo, junior, null);
-          send({ type: "reviewed", review });
+          const review = finalizeAiReview(input.assignedTo, junior, null, {
+            via: juniorRes.via,
+            juniorSessionId: juniorRes.sessionId,
+          });
+          send({ type: "reviewed", review, via: juniorRes.via });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error("[/api/triage/auto-review]", err);

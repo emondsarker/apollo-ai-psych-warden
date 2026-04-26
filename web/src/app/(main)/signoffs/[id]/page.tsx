@@ -606,12 +606,36 @@ function AiReviewSection({
           <span
             style={{
               marginLeft: "auto",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
               fontFamily: "var(--font-mono)",
               fontSize: 10.5,
               color: "var(--text-3)",
               letterSpacing: "0.04em",
             }}
           >
+            {review.via === "managed-agents" && (
+              <span
+                title={
+                  review.juniorSessionId
+                    ? `Managed Agents · session ${review.juniorSessionId}`
+                    : "Anthropic Claude Managed Agents"
+                }
+                style={{
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                  background: "var(--brand-ink)",
+                  color: "white",
+                  fontSize: 9.5,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                  fontWeight: 700,
+                }}
+              >
+                Managed Agents
+              </span>
+            )}
             {review.model}
           </span>
         </div>

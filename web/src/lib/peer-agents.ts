@@ -53,6 +53,11 @@ export interface AiReviewRecord {
   finalDeciderPeerId: string;
   model: string;
   decidedAt: string;
+  /** Which provenance produced this review. */
+  via?: "messages-api" | "managed-agents";
+  /** Managed Agents session id, when via=managed-agents. */
+  juniorSessionId?: string;
+  directorSessionId?: string;
 }
 
 // ── System prompts ───────────────────────────────────────────────────────
@@ -135,19 +140,48 @@ const PEER_SYSTEM: Record<string, string> = {
 
 // ── Public API ───────────────────────────────────────────────────────────
 
+export interface PeerReviewResult {
+  decision: PeerDecision;
+  /** Provenance — which path actually produced the decision. */
+  via: "messages-api" | "managed-agents";
+  /** Managed Agents session id, when used. */
+  sessionId?: string;
+}
+
+export interface DirectorReviewResult {
+  decision: DirectorDecision;
+  via: "messages-api" | "managed-agents";
+  sessionId?: string;
+}
+
 export async function runPeerReview(
   peerId: string,
   thread: TriageThread,
   results: Record<string, unknown>,
   options: { onAttempt?: (info: ToolJsonAttempt) => void } = {},
-): Promise<PeerDecision> {
+): Promise<PeerReviewResult> {
+  // Lazy import so the messages-API path doesn't pay the import cost when
+  // managed agents is off (and so circular references stay clean — the
+  // managed lib imports schemas + prompts from this file).
+  const { managedAgentsEnabled, runPeerReviewManaged } = await import(
+    "./peer-agents-managed"
+  );
+  if (managedAgentsEnabled()) {
+    const { decision, sessionId } = await runPeerReviewManaged(
+      peerId,
+      thread,
+      results,
+    );
+    return { decision, via: "managed-agents", sessionId };
+  }
+
   const peer = findPeer(peerId);
   if (!peer) throw new Error(`Unknown peer: ${peerId}`);
   const system = PEER_SYSTEM[peerId];
   if (!system) throw new Error(`No system prompt configured for ${peerId}`);
 
   const userPrompt = buildReviewPrompt(peer, thread, results);
-  return toolJsonRetry(
+  const decision = await toolJsonRetry(
     PeerDecisionSchema,
     "emit_peer_decision",
     `Emit ${peer.name}'s sign-off decision for this case.`,
@@ -161,6 +195,7 @@ export async function runPeerReview(
       onAttempt: options.onAttempt,
     },
   );
+  return { decision, via: "messages-api" };
 }
 
 export async function runDirectorReview(
@@ -168,10 +203,22 @@ export async function runDirectorReview(
   results: Record<string, unknown>,
   juniorContext: { peerId: string; decision: PeerDecision } | null,
   options: { onAttempt?: (info: ToolJsonAttempt) => void } = {},
-): Promise<DirectorDecision> {
+): Promise<DirectorReviewResult> {
+  const { managedAgentsEnabled, runDirectorReviewManaged } = await import(
+    "./peer-agents-managed"
+  );
+  if (managedAgentsEnabled()) {
+    const { decision, sessionId } = await runDirectorReviewManaged(
+      thread,
+      results,
+      juniorContext,
+    );
+    return { decision, via: "managed-agents", sessionId };
+  }
+
   const elena = findPeer("elena")!;
   const userPrompt = buildDirectorPrompt(thread, results, juniorContext);
-  return toolJsonRetry(
+  const decision = await toolJsonRetry(
     DirectorDecisionSchema,
     "emit_director_decision",
     `Emit ${elena.name}'s final sign-off decision.`,
@@ -185,6 +232,7 @@ export async function runDirectorReview(
       onAttempt: options.onAttempt,
     },
   );
+  return { decision, via: "messages-api" };
 }
 
 // ── Prompt construction ──────────────────────────────────────────────────
@@ -248,8 +296,18 @@ export function finalizeAiReview(
     decision: DirectorDecision;
     peerId: string;
   } | null,
+  provenance?: {
+    via?: "messages-api" | "managed-agents";
+    juniorSessionId?: string;
+    directorSessionId?: string;
+  },
 ): AiReviewRecord {
   const decidedAt = new Date().toISOString();
+  const base = {
+    via: provenance?.via,
+    juniorSessionId: provenance?.juniorSessionId,
+    directorSessionId: provenance?.directorSessionId,
+  };
 
   // If the junior approved or returned, that's final unless they escalated.
   if (!directorContext && juniorDecision.decision !== "escalated") {
@@ -263,6 +321,7 @@ export function finalizeAiReview(
       finalDeciderPeerId: juniorPeerId,
       model: OPUS_MODEL,
       decidedAt,
+      ...base,
     };
   }
 
@@ -277,6 +336,7 @@ export function finalizeAiReview(
       finalDeciderPeerId: juniorPeerId,
       model: OPUS_MODEL,
       decidedAt,
+      ...base,
     };
   }
 
@@ -290,6 +350,7 @@ export function finalizeAiReview(
     finalDeciderPeerId: directorContext.peerId,
     model: OPUS_MODEL,
     decidedAt,
+    ...base,
   };
 }
 

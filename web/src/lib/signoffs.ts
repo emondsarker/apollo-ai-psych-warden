@@ -33,6 +33,9 @@ export const AiReviewSchema = z.object({
   finalDeciderPeerId: z.string(),
   model: z.string(),
   decidedAt: z.string(),
+  via: z.enum(["messages-api", "managed-agents"]).optional(),
+  juniorSessionId: z.string().optional(),
+  directorSessionId: z.string().optional(),
 });
 
 export const SignoffRecordSchema = z.object({
