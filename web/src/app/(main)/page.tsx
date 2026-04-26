@@ -1,191 +1,263 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import {
-  OraclePane,
-  type CaseRow,
-  type ConsoleContext,
-  type PendingSignoffRow,
-  type TargetTally,
-} from "@/components/OraclePane";
-import { loadAllCases, aggregateStats } from "@/lib/content";
-import { listSignoffs } from "@/lib/signoffs";
-import { findPeer } from "@/lib/peers";
-import type { Autopsy } from "@/lib/types";
+import { ApolloLine } from "@/components/ApolloLine";
+import { StationGrid, type Station } from "@/components/StationGrid";
+import { loadAllCases } from "@/lib/content";
+import { listSignoffs, type SignoffRecord } from "@/lib/signoffs";
+import { findPeer, type Peer } from "@/lib/peers";
+import { getCurrentUser } from "@/lib/currentUser";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [cases, signoffs] = await Promise.all([
+  const [cases, signoffs, currentUser] = await Promise.all([
     loadAllCases(),
     listSignoffs(),
+    getCurrentUser(),
   ]);
-  const stats = aggregateStats(cases);
 
-  const inReviewCount = cases.filter(
-    (c) => c.correction !== null && !c.correction.criticApproved,
+  const inboxCount = signoffs.filter(
+    (s) => s.status === "awaiting" && s.assignedTo === currentUser.id,
   ).length;
-  const approvedCount = cases.filter(
-    (c) => c.correction !== null && c.correction.criticApproved,
-  ).length;
-  const severeCount = stats.severe + stats.critical;
-  const awaitingSignoff = signoffs.filter((s) => s.status === "awaiting").length;
+  const allAwaiting = signoffs.filter((s) => s.status === "awaiting").length;
+  const approvedCount = signoffs.filter((s) => s.status === "approved").length;
+  const peerCount = 5; // PEERS roster is a fixed five
 
-  const rows: CaseRow[] = cases.map(toRow);
-  const recentCases = rows.slice(0, 12);
-  const processingCase =
-    rows.find((r) => r.status === "in-review") ??
-    rows.find((r) => r.status === "draft") ??
-    rows[0] ??
-    null;
-  const recentApproved = rows.filter((r) => r.status === "approved").slice(0, 6);
+  const recommendation = pickRecommendation({
+    me: currentUser,
+    signoffs,
+    inboxCount,
+    allAwaiting,
+    casesCount: cases.length,
+  });
 
-  const byTarget = tallyByTarget(cases);
-  const pendingSignoffs: PendingSignoffRow[] = signoffs
-    .filter((s) => s.status === "awaiting")
-    .slice(0, 8)
-    .map((s) => {
-      const peer = findPeer(s.assignedTo);
-      return {
-        id: s.id,
-        target: s.thread.participants.target || "unknown",
-        assignedTo: peer?.name ?? s.assignedTo,
-        filedAt: s.filedAt,
-      };
-    });
-
-  const consoleContext: ConsoleContext = {
-    totals: {
-      cases: cases.length,
-      severe: stats.severe,
-      critical: stats.critical,
-      approved: approvedCount,
-      inReview: inReviewCount,
-      awaitingSignoff,
+  const stations: Station[] = [
+    {
+      href: "/triage",
+      title: "Triage a thread",
+      description:
+        "Drop a single conversation. Apollo runs the six-stage analysis live, end-to-end.",
+      glyph: "▣",
+      recommended: recommendation.station === "triage",
     },
-    byTarget,
-    pendingSignoffs,
-    recentCases: rows.slice(0, 10).map((r) => ({
-      caseNumber: r.caseNumber,
-      title: r.title,
-      target: r.targetDisplayName,
-      severity: r.severity,
-    })),
-    recentTitles: rows.slice(0, 10).map((r) => r.title),
-  };
+    {
+      href: "/triage/bulk",
+      title: "Bulk triage",
+      description:
+        "Drop a zip of conversations. Auto-pilot runs analyze → peer review → file unattended.",
+      glyph: "▦",
+      recommended: recommendation.station === "bulk",
+    },
+    {
+      href: "/inbox",
+      title: "My inbox",
+      description: `Sign-offs assigned to ${currentUser.name.split(" ").slice(-1)[0]}.`,
+      glyph: "✉",
+      count: inboxCount,
+      urgent: inboxCount > 0,
+      recommended: recommendation.station === "inbox",
+    },
+    {
+      href: "/signoffs",
+      title: "All sign-offs",
+      description:
+        "Every case on the books. Filter by awaiting · approved · returned. Export the corpus.",
+      glyph: "§",
+      count: allAwaiting,
+      urgent: allAwaiting > 0,
+      recommended: recommendation.station === "signoffs",
+    },
+    {
+      href: "/peers",
+      title: "Peers",
+      description: "The five-reviewer bench. Switch profile from the sidebar.",
+      glyph: "❖",
+      count: peerCount,
+      recommended: recommendation.station === "peers",
+    },
+    {
+      href: "/cases",
+      title: "Past cases",
+      description: "The autopsy archive. Approved cases ship to the corpus from here.",
+      glyph: "▤",
+      count: cases.length,
+      recommended: recommendation.station === "cases",
+    },
+    {
+      href: "/run",
+      title: "Run a conversation",
+      description: "Stage an adversarial encounter against a target model. Synthetic corpus generation.",
+      glyph: "▶",
+    },
+    {
+      href: "/methodology",
+      title: "Methodology",
+      description: "The instruments — LIWC-22, DSM-5-TR, C-SSRS, MITI 4.2.1, CAPE-II, Stark, Brown, APA.",
+      glyph: "𝕄",
+    },
+    {
+      href: "/corpus",
+      title: "Corpus stats",
+      description: "Aggregate counts: severity, failure category, persona, target. The shape of the data.",
+      glyph: "▥",
+    },
+    {
+      href: "/export",
+      title: "Export",
+      description: "JSONL exports in DPO, HH-RLHF, or conversational formats. Filtered.",
+      glyph: "↗",
+      count: approvedCount,
+    },
+    {
+      href: "/about",
+      title: "About",
+      description: "What Primum is, why it exists, who built it.",
+      glyph: "i",
+    },
+    {
+      href: `/peers/${currentUser.id}`,
+      title: "Your profile",
+      description: `${currentUser.name} · ${currentUser.role}.`,
+      glyph: currentUser.initials,
+    },
+  ];
 
   return (
-    <AppShell
-      active="dashboard"
-      crumbs={[{ label: "Console" }]}
-      counts={{ cases: cases.length, review: awaitingSignoff }}
-      fullBleed
-      actions={
-        <>
-          <Link
-            href="/export"
-            className="btn btn-ghost"
-            style={{ height: 32, padding: "0 12px", fontSize: 13 }}
+    <AppShell crumbs={[{ label: "Console" }]}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "8px 0 32px" }}>
+        <header style={{ marginBottom: 28 }}>
+          <div className="eyebrow" style={{ color: "var(--accent)", marginBottom: 6 }}>
+            Console · {currentUser.role}
+          </div>
+          <h1
+            style={{
+              fontFamily: "var(--font-serif)",
+              fontSize: 32,
+              fontWeight: 600,
+              letterSpacing: "-0.012em",
+              color: "var(--text-1)",
+              margin: 0,
+              lineHeight: 1.1,
+            }}
           >
-            Export
+            {greet(currentUser)}
+          </h1>
+          <ApolloLine text={recommendation.line} />
+        </header>
+
+        <StationGrid stations={stations} />
+
+        <footer
+          style={{
+            marginTop: 36,
+            paddingTop: 18,
+            borderTop: "1px solid var(--border)",
+            fontFamily: "var(--font-serif)",
+            fontStyle: "italic",
+            fontSize: 13,
+            color: "var(--text-3)",
+            lineHeight: 1.5,
+          }}
+        >
+          <em>Primum non nocere</em> — first, do no harm.{" "}
+          <Link href="/methodology" style={{ color: "var(--accent)" }}>
+            Methodology
+          </Link>{" "}
+          ·{" "}
+          <Link href="/about" style={{ color: "var(--accent)" }}>
+            About
           </Link>
-          <Link
-            href="/triage"
-            className="btn btn-primary"
-            style={{ height: 32, padding: "0 12px", fontSize: 13 }}
-          >
-            <span aria-hidden>+</span> Triage thread
-          </Link>
-        </>
-      }
-    >
-      <OraclePane
-        cases={cases.length}
-        inReview={inReviewCount}
-        approved={approvedCount}
-        severe={severeCount}
-        annotations={stats.totalAnnotatedTurns}
-        awaitingSignoff={awaitingSignoff}
-        recentCases={recentCases}
-        processingCase={processingCase}
-        recentApproved={recentApproved}
-        pendingSignoffs={pendingSignoffs}
-        byTarget={byTarget}
-        consoleContext={consoleContext}
-      />
+        </footer>
+      </div>
     </AppShell>
   );
 }
 
-function toRow(c: Autopsy): CaseRow {
-  const status: CaseRow["status"] =
-    c.correction === null
-      ? "draft"
-      : c.correction.criticApproved
-        ? "approved"
-        : "in-review";
+function greet(p: Peer): string {
+  const hour = new Date().getHours();
+  const tod =
+    hour < 5 ? "Late, " : hour < 12 ? "Good morning, " : hour < 18 ? "Good afternoon, " : "Good evening, ";
+  return `${tod}${firstName(p)}.`;
+}
+
+function firstName(p: Peer): string {
+  return p.name.replace(/^(Dr\.?|Prof\.?|Mr\.?|Ms\.?|Mrs\.?)\s+/i, "").split(/[ ,]/)[0] || p.name;
+}
+
+interface RecommendationContext {
+  me: Peer;
+  signoffs: SignoffRecord[];
+  inboxCount: number;
+  allAwaiting: number;
+  casesCount: number;
+}
+
+interface DashboardRecommendation {
+  station:
+    | "triage"
+    | "bulk"
+    | "inbox"
+    | "signoffs"
+    | "peers"
+    | "cases"
+    | null;
+  line: string;
+}
+
+function pickRecommendation(ctx: RecommendationContext): DashboardRecommendation {
+  const name = firstName(ctx.me);
+
+  if (ctx.inboxCount > 0) {
+    const mine = ctx.signoffs
+      .filter((s) => s.status === "awaiting" && s.assignedTo === ctx.me.id)
+      .sort((a, z) => severity(z) - severity(a));
+    const top = mine[0];
+    const headline = top ? caseHeadline(top) : null;
+    return {
+      station: "inbox",
+      line: headline
+        ? `Please pick a station to get started, ${name}. I'd open the inbox first — ${ctx.inboxCount} ${ctx.inboxCount === 1 ? "case" : "cases"} on your desk; the heaviest is ${headline}.`
+        : `Please pick a station to get started, ${name}. ${ctx.inboxCount} ${ctx.inboxCount === 1 ? "case" : "cases"} sitting in your inbox.`,
+    };
+  }
+
+  if (ctx.allAwaiting > 0) {
+    return {
+      station: "signoffs",
+      line: `Please pick a station to get started, ${name}. The bench has ${ctx.allAwaiting} pending across reviewers — All sign-offs is the place if you want to help out.`,
+    };
+  }
+
+  if (ctx.casesCount === 0 && ctx.signoffs.length === 0) {
+    return {
+      station: "bulk",
+      line: `Please pick a station to get started, ${name}. Nothing on the books yet — Bulk triage takes a zip and runs the whole pipeline unattended.`,
+    };
+  }
+
+  // Default: at least suggest *something* — the most recently filed case is
+  // a useful read for an operator just walking up to the desk.
+  const recent = [...ctx.signoffs].sort((a, z) => (a.filedAt < z.filedAt ? 1 : -1))[0];
+  if (recent) {
+    const reviewer = findPeer(recent.assignedTo);
+    return {
+      station: "signoffs",
+      line: `Please pick a station to get started, ${name}. The most recent case landed on ${reviewer?.name ?? recent.assignedTo}'s desk — All sign-offs to read along.`,
+    };
+  }
+
   return {
-    id: c.id,
-    caseNumber: c.caseNumber,
-    title: c.title,
-    date: c.date,
-    targetDisplayName: c.targetDisplayName,
-    personaCode: c.personaCode,
-    severity: c.judgement.overallSeverity,
-    failurePointTurn: c.judgement.failurePointTurn,
-    totalTurns: c.totalTurns,
-    status,
+    station: "bulk",
+    line: `Please pick a station to get started, ${name}. Try Bulk triage — drop a zip and watch the bench work.`,
   };
 }
 
-function tallyByTarget(cases: Autopsy[]): TargetTally[] {
-  type Bucket = {
-    target: string;
-    display: string;
-    cases: number;
-    severeOrCritical: number;
-    approved: number;
-    inReview: number;
-    categories: Map<string, number>;
-  };
-  const buckets = new Map<string, Bucket>();
-  for (const c of cases) {
-    let b = buckets.get(c.target);
-    if (!b) {
-      b = {
-        target: c.target,
-        display: c.targetDisplayName,
-        cases: 0,
-        severeOrCritical: 0,
-        approved: 0,
-        inReview: 0,
-        categories: new Map(),
-      };
-      buckets.set(c.target, b);
-    }
-    b.cases += 1;
-    if (c.judgement.overallSeverity >= 3) b.severeOrCritical += 1;
-    if (c.correction) {
-      if (c.correction.criticApproved) b.approved += 1;
-      else b.inReview += 1;
-    }
-    for (const ann of c.judgement.annotations) {
-      for (const cat of ann.failureCategories) {
-        b.categories.set(cat, (b.categories.get(cat) ?? 0) + 1);
-      }
-    }
-  }
-  return Array.from(buckets.values())
-    .map((b) => ({
-      target: b.target,
-      display: b.display,
-      cases: b.cases,
-      severeOrCritical: b.severeOrCritical,
-      approved: b.approved,
-      inReview: b.inReview,
-      topCategories: Array.from(b.categories.entries())
-        .map(([name, count]) => ({ name, count }))
-        .sort((a, z) => z.count - a.count)
-        .slice(0, 3),
-    }))
-    .sort((a, z) => z.cases - a.cases);
+function severity(s: SignoffRecord): number {
+  const v = s.results?.verdict as { overallSeverity?: number } | undefined;
+  return v?.overallSeverity ?? 0;
+}
+
+function caseHeadline(s: SignoffRecord): string {
+  const v = s.results?.verdict as { headline?: string } | undefined;
+  return v?.headline?.trim() || `${s.thread.detectedFormat} · ${s.thread.turns.length} turns`;
 }

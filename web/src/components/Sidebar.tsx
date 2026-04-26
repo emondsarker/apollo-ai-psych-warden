@@ -22,7 +22,11 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const active = pathToActive(pathname);
-  const withApollo = active !== "dashboard";
+  // Apollo lives in the sidebar on every page now — including the
+  // dashboard, where his speech bubble shows the operator's
+  // recommended next station.
+  const withApollo = true;
+  void active; // kept for downstream tweaks; nav highlighting uses pathname directly via <SideLink>.
 
   return (
     <aside
