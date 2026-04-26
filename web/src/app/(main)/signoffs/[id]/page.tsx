@@ -6,6 +6,8 @@ import { ApolloLine } from "@/components/ApolloLine";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { SignoffActions } from "@/components/SignoffActions";
 import { SignoffExports } from "@/components/SignoffExports";
+import { SignoffTrainingPair } from "@/components/SignoffTrainingPair";
+import type { TrainingPair } from "@/components/TrainingPairCompare";
 import { findPeer } from "@/lib/peers";
 import { getSignoff } from "@/lib/signoffs";
 import { getCurrentUser } from "@/lib/currentUser";
@@ -304,6 +306,13 @@ export default async function SignoffReviewPage({
           </Section>
 
           {record.aiReview && <AiReviewSection review={record.aiReview} />}
+
+          <Section title="Training pair · original vs. corrected">
+            <SignoffTrainingPair
+              signoffId={record.id}
+              initial={(record.trainingPair as TrainingPair | null) ?? null}
+            />
+          </Section>
 
           {record.postmortemMarkdown && (
             <Section title="Case report">
