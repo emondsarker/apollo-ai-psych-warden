@@ -13,11 +13,9 @@ Built for the **Built with Opus 4.7** hackathon (April 21–26, 2026).
 
 ## Demo
 
-[![3-min walkthrough](docs/demo-thumbnail.png)](docs/primum-demo.mp4)
-
-> _The 3-minute walkthrough lives at `docs/primum-demo.mp4` once rendered (see `video/README.md`)._
-
 [**Live URL**](https://apollo-ai-psych-warden.vercel.app) · [Repo](https://github.com/emondsarker/apollo-ai-psych-warden) · [Sample bulk-triage zip](web/public/primum-bulk-sample.zip)
+
+> The 3-minute walkthrough is built with Remotion — see [`video/README.md`](video/README.md) for the render pipeline. The hackathon submission links the rendered video directly.
 
 ## What it does
 
