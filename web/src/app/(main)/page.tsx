@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ApolloLine } from "@/components/ApolloLine";
 import { StationGrid, type Station } from "@/components/StationGrid";
@@ -20,7 +19,6 @@ export default async function HomePage() {
     (s) => s.status === "awaiting" && s.assignedTo === currentUser.id,
   ).length;
   const allAwaiting = signoffs.filter((s) => s.status === "awaiting").length;
-  const approvedCount = signoffs.filter((s) => s.status === "approved").length;
   const peerCount = 5; // PEERS roster is a fixed five
 
   const recommendation = pickRecommendation({
@@ -31,6 +29,7 @@ export default async function HomePage() {
     casesCount: cases.length,
   });
 
+  // Mirrors the sidebar's six nav items exactly — same routes, same order.
   const stations: Station[] = [
     {
       href: "/triage",
@@ -83,43 +82,6 @@ export default async function HomePage() {
       count: cases.length,
       recommended: recommendation.station === "cases",
     },
-    {
-      href: "/run",
-      title: "Run a conversation",
-      description: "Stage an adversarial encounter against a target model. Synthetic corpus generation.",
-      glyph: "▶",
-    },
-    {
-      href: "/methodology",
-      title: "Methodology",
-      description: "The instruments — LIWC-22, DSM-5-TR, C-SSRS, MITI 4.2.1, CAPE-II, Stark, Brown, APA.",
-      glyph: "𝕄",
-    },
-    {
-      href: "/corpus",
-      title: "Corpus stats",
-      description: "Aggregate counts: severity, failure category, persona, target. The shape of the data.",
-      glyph: "▥",
-    },
-    {
-      href: "/export",
-      title: "Export",
-      description: "JSONL exports in DPO, HH-RLHF, or conversational formats. Filtered.",
-      glyph: "↗",
-      count: approvedCount,
-    },
-    {
-      href: "/about",
-      title: "About",
-      description: "What Primum is, why it exists, who built it.",
-      glyph: "i",
-    },
-    {
-      href: `/peers/${currentUser.id}`,
-      title: "Your profile",
-      description: `${currentUser.name} · ${currentUser.role}.`,
-      glyph: currentUser.initials,
-    },
   ];
 
   return (
@@ -159,14 +121,7 @@ export default async function HomePage() {
             lineHeight: 1.5,
           }}
         >
-          <em>Primum non nocere</em> — first, do no harm.{" "}
-          <Link href="/methodology" style={{ color: "var(--accent)" }}>
-            Methodology
-          </Link>{" "}
-          ·{" "}
-          <Link href="/about" style={{ color: "var(--accent)" }}>
-            About
-          </Link>
+          <em>Primum non nocere</em> — first, do no harm.
         </footer>
       </div>
     </AppShell>
