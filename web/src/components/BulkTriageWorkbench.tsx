@@ -1,10 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ApolloLine } from "./ApolloLine";
 import type { Peer } from "@/lib/peers";
+import type { Recommendation } from "@/lib/apollo-recommend";
 import type { TriageThread } from "@/lib/triage";
+import { severityLabel } from "@/lib/triage";
 
 type ParsedFile =
   | {
@@ -34,29 +37,30 @@ type ParsedFile =
 
 type RowState =
   | { kind: "queued" }
-  | { kind: "running"; stage: string }
-  | { kind: "done"; signoffId: string }
+  | { kind: "analyzing"; stage: string }
+  | {
+      kind: "analyzed";
+      thread: TriageThread;
+      results: Record<string, unknown>;
+      recommendation: Recommendation;
+      assignedTo: string;
+      apolloLine: string | null;
+      severity: number;
+      headline: string | null;
+    }
+  | { kind: "filing" }
+  | { kind: "filed"; signoffId: string; assignedTo: string; severity: number; headline: string | null }
   | { kind: "error"; message: string };
 
 type Row = {
   parsed: ParsedFile;
-  assignedTo: string;
-  selected: boolean;
   state: RowState;
-};
-
-const ROUND_ROBIN = (peers: Peer[], operatorId: string, idx: number): string => {
-  const queue = peers.filter((p) => p.id !== operatorId);
-  const list = queue.length ? queue : peers;
-  return list[idx % list.length].id;
 };
 
 export function BulkTriageWorkbench({
   peers,
-  currentUserId,
 }: {
   peers: Peer[];
-  currentUserId: string;
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -64,7 +68,8 @@ export function BulkTriageWorkbench({
   const [parseError, setParseError] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [processing, setProcessing] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [filing, setFiling] = useState(false);
 
   async function uploadFile(file: File) {
     setBusy(true);
@@ -78,10 +83,8 @@ export function BulkTriageWorkbench({
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
       const files = (data.files as ParsedFile[]) ?? [];
       setRows(
-        files.map((f, i) => ({
+        files.map((f) => ({
           parsed: f,
-          assignedTo: ROUND_ROBIN(peers, currentUserId, i),
-          selected: f.status !== "error",
           state: { kind: "queued" } as RowState,
         })),
       );
@@ -98,48 +101,34 @@ export function BulkTriageWorkbench({
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  async function processSelected() {
-    if (!rows || processing) return;
-    setProcessing(true);
+  async function analyzeAll() {
+    if (!rows || analyzing) return;
+    setAnalyzing(true);
     try {
       const targets = rows
         .map((r, i) => ({ r, i }))
-        .filter(({ r }) => r.selected && r.parsed.status !== "error");
-
-      // Run sequentially — each thread is 6 LLM stages; running them in
-      // parallel will trip rate limits or saturate the local server.
-      for (const { r, i } of targets) {
-        await processOne(i, r);
+        .filter(({ r }) => r.parsed.status !== "error" && r.state.kind === "queued");
+      // Sequential — each thread is 6 LLM stages, parallel would saturate.
+      for (const { i } of targets) {
+        await analyzeOne(i);
       }
     } finally {
-      setProcessing(false);
-      router.refresh();
+      setAnalyzing(false);
     }
   }
 
-  async function processOne(index: number, row: Row) {
-    if (row.parsed.status === "error") return;
-    updateRow(index, () => ({ kind: "running", stage: "starting" }));
+  async function analyzeOne(index: number) {
+    const row = rowsRef.current?.[index];
+    if (!row || row.parsed.status === "error") return;
+    updateRow(index, { kind: "analyzing", stage: "starting" });
 
     const body =
       row.parsed.status === "ok"
-        ? {
-            fileName: row.parsed.name,
-            thread: row.parsed.thread,
-            rawText: null,
-            assignedTo: row.assignedTo,
-            note: `Bulk-triaged from ${row.parsed.name}`,
-          }
-        : {
-            fileName: row.parsed.name,
-            thread: null,
-            rawText: row.parsed.rawText,
-            assignedTo: row.assignedTo,
-            note: `Bulk-triaged from ${row.parsed.name}`,
-          };
+        ? { fileName: row.parsed.name, thread: row.parsed.thread, rawText: null }
+        : { fileName: row.parsed.name, thread: null, rawText: row.parsed.rawText };
 
     try {
-      const res = await fetch("/api/triage/bulk/process", {
+      const res = await fetch("/api/triage/bulk/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -151,7 +140,6 @@ export function BulkTriageWorkbench({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      let signoffId: string | null = null;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -161,68 +149,146 @@ export function BulkTriageWorkbench({
           const line = buf.slice(0, idx).trim();
           buf = buf.slice(idx + 1);
           if (!line) continue;
-          let event: { type: string; name?: string; status?: string; id?: string; message?: string };
+          let event: {
+            type: string;
+            name?: string;
+            status?: string;
+            message?: string;
+            thread?: TriageThread;
+            results?: Record<string, unknown>;
+            recommendation?: Recommendation;
+            apolloLine?: string | null;
+          };
           try {
             event = JSON.parse(line);
           } catch {
             continue;
           }
           if (event.type === "stage" && event.status === "started") {
-            updateRow(index, () => ({ kind: "running", stage: event.name ?? "?" }));
-          } else if (event.type === "filed" && event.id) {
-            signoffId = event.id;
+            updateRow(index, { kind: "analyzing", stage: event.name ?? "?" });
+          } else if (event.type === "analyzed" && event.recommendation && event.thread && event.results) {
+            const verdict = (event.results.verdict ?? null) as
+              | { overallSeverity?: number; headline?: string }
+              | null;
+            updateRow(index, {
+              kind: "analyzed",
+              thread: event.thread,
+              results: event.results,
+              recommendation: event.recommendation,
+              assignedTo: event.recommendation.peerId,
+              apolloLine: event.apolloLine ?? null,
+              severity: verdict?.overallSeverity ?? 0,
+              headline: verdict?.headline ?? null,
+            });
           } else if (event.type === "error" && event.message) {
             throw new Error(event.message);
           }
         }
       }
-      if (!signoffId) throw new Error("Stream ended without filed event.");
-      updateRow(index, () => ({ kind: "done", signoffId: signoffId! }));
     } catch (e) {
-      updateRow(index, () => ({
+      updateRow(index, {
         kind: "error",
         message: e instanceof Error ? e.message : String(e),
-      }));
+      });
     }
   }
 
-  function updateRow(idx: number, mut: (r: Row) => Partial<Row> | RowState) {
+  async function fileRow(index: number) {
+    const row = rowsRef.current?.[index];
+    if (!row || row.state.kind !== "analyzed") return;
+    const { thread, results, assignedTo, severity, headline, recommendation } = row.state;
+    updateRow(index, { kind: "filing" });
+    try {
+      const res = await fetch("/api/triage/file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread,
+          results,
+          trainingPair: null,
+          postmortemMarkdown: null,
+          assignedTo,
+          note: `Bulk-triaged from ${row.parsed.status === "error" ? "?" : row.parsed.name}. ${recommendation.reason}`,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      updateRow(index, {
+        kind: "filed",
+        signoffId: data.id,
+        assignedTo,
+        severity,
+        headline,
+      });
+    } catch (e) {
+      updateRow(index, {
+        kind: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  async function fileAllAnalyzed() {
+    if (!rows || filing) return;
+    setFiling(true);
+    try {
+      const targets = (rowsRef.current ?? [])
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.state.kind === "analyzed");
+      for (const { i } of targets) {
+        await fileRow(i);
+      }
+    } finally {
+      setFiling(false);
+      router.refresh();
+    }
+  }
+
+  // Keep a synchronous ref to the latest rows so async analyze/file loops
+  // can read fresh state without setState closures going stale.
+  const rowsRef = useRef<Row[] | null>(null);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  function updateRow(idx: number, state: RowState) {
     setRows((prev) => {
       if (!prev) return prev;
       const next = [...prev];
-      const out = mut(next[idx]);
-      if ("kind" in out) {
-        next[idx] = { ...next[idx], state: out };
-      } else {
-        next[idx] = { ...next[idx], ...out };
-      }
+      next[idx] = { ...next[idx], state };
       return next;
     });
   }
 
-  function setAllAssignees(peerId: string) {
-    setRows((prev) =>
-      prev ? prev.map((r) => ({ ...r, assignedTo: peerId })) : prev,
-    );
-  }
-
-  function distributeRoundRobin() {
-    setRows((prev) =>
-      prev
-        ? prev.map((r, i) => ({
-            ...r,
-            assignedTo: ROUND_ROBIN(peers, currentUserId, i),
-          }))
-        : prev,
-    );
+  function reassignRow(idx: number, peerId: string) {
+    setRows((prev) => {
+      if (!prev) return prev;
+      const r = prev[idx];
+      if (r.state.kind !== "analyzed") return prev;
+      const next = [...prev];
+      next[idx] = { ...r, state: { ...r.state, assignedTo: peerId } };
+      return next;
+    });
   }
 
   const okCount = rows?.filter((r) => r.parsed.status === "ok").length ?? 0;
-  const llmCount =
-    rows?.filter((r) => r.parsed.status === "needs-llm-format").length ?? 0;
+  const llmCount = rows?.filter((r) => r.parsed.status === "needs-llm-format").length ?? 0;
   const errCount = rows?.filter((r) => r.parsed.status === "error").length ?? 0;
-  const selectedCount = rows?.filter((r) => r.selected).length ?? 0;
-  const doneCount = rows?.filter((r) => r.state.kind === "done").length ?? 0;
+  const queuedCount = rows?.filter((r) => r.state.kind === "queued" && r.parsed.status !== "error").length ?? 0;
+  const analyzedCount = rows?.filter((r) => r.state.kind === "analyzed").length ?? 0;
+  const filedCount = rows?.filter((r) => r.state.kind === "filed").length ?? 0;
+  const totalReady = okCount + llmCount;
+
+  const apolloHeader = computeApolloHeader({
+    rows,
+    analyzing,
+    filing,
+    queuedCount,
+    analyzedCount,
+    filedCount,
+    totalReady,
+    parseError,
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -242,20 +308,7 @@ export function BulkTriageWorkbench({
         >
           Drop a zip of conversations.
         </h1>
-        <p
-          style={{
-            margin: "8px 0 0",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontSize: 14,
-            color: "var(--text-2)",
-            maxWidth: 700,
-          }}
-        >
-          Each file becomes one triage. JSON, JSONL, CSV, plain text, and
-          markdown chat logs are all accepted — Apollo will format anything
-          loosely structured before analysis.
-        </p>
+        <ApolloLine text={apolloHeader} />
       </header>
 
       {!rows && (
@@ -290,7 +343,8 @@ export function BulkTriageWorkbench({
               color: "white",
               display: "grid",
               placeItems: "center",
-              boxShadow: "0 0 0 1px oklch(52% 0.22 16 / 0.4), 0 6px 22px oklch(52% 0.22 16 / 0.18)",
+              boxShadow:
+                "0 0 0 1px oklch(52% 0.22 16 / 0.4), 0 6px 22px oklch(52% 0.22 16 / 0.18)",
             }}
             aria-hidden
           >
@@ -378,65 +432,59 @@ export function BulkTriageWorkbench({
           >
             <div style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: "var(--text-2)" }}>
               <strong style={{ color: "var(--text-1)" }}>{rows.length}</strong> files ·{" "}
-              <span style={{ color: "var(--success)" }}>{okCount} ready</span>
-              {llmCount > 0 && (
-                <>
-                  {" · "}
-                  <span style={{ color: "var(--warn)" }}>{llmCount} need format</span>
-                </>
-              )}
+              <span style={{ color: "var(--success)" }}>{totalReady} ready</span>
               {errCount > 0 && (
                 <>
                   {" · "}
                   <span style={{ color: "var(--accent)" }}>{errCount} skipped</span>
                 </>
               )}
-              {processing && doneCount > 0 && (
+              {analyzedCount > 0 && (
                 <>
                   {" · "}
-                  <span style={{ color: "var(--text-1)" }}>
-                    {doneCount}/{selectedCount} done
-                  </span>
+                  <span style={{ color: "var(--text-1)" }}>{analyzedCount} analyzed</span>
+                </>
+              )}
+              {filedCount > 0 && (
+                <>
+                  {" · "}
+                  <span style={{ color: "var(--success)" }}>{filedCount} filed</span>
                 </>
               )}
             </div>
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-              <PeerSelect
-                peers={peers}
-                value=""
-                placeholder="Assign all to…"
-                onChange={(v) => v && setAllAssignees(v)}
-              />
-              <button
-                type="button"
-                onClick={distributeRoundRobin}
-                disabled={processing}
-                className="btn btn-ghost"
-                style={{ height: 32, padding: "0 12px", fontSize: 12 }}
-              >
-                Round-robin
-              </button>
               <button
                 type="button"
                 onClick={reset}
-                disabled={processing}
+                disabled={analyzing || filing}
                 className="btn btn-ghost"
                 style={{ height: 32, padding: "0 12px", fontSize: 12 }}
               >
                 Discard
               </button>
-              <button
-                type="button"
-                onClick={processSelected}
-                disabled={processing || selectedCount === 0}
-                className="btn btn-primary"
-                style={{ height: 32, padding: "0 16px", fontSize: 13 }}
-              >
-                {processing
-                  ? `Triaging… ${doneCount}/${selectedCount}`
-                  : `Triage ${selectedCount} ${selectedCount === 1 ? "file" : "files"}`}
-              </button>
+              {analyzedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={fileAllAnalyzed}
+                  disabled={analyzing || filing}
+                  className="btn btn-primary"
+                  style={{ height: 32, padding: "0 16px", fontSize: 13 }}
+                >
+                  {filing ? `Filing…` : `File ${analyzedCount} ${analyzedCount === 1 ? "case" : "cases"}`}
+                </button>
+              )}
+              {queuedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={analyzeAll}
+                  disabled={analyzing || filing}
+                  className="btn btn-primary"
+                  style={{ height: 32, padding: "0 16px", fontSize: 13 }}
+                >
+                  {analyzing ? `Analyzing…` : `Analyze ${queuedCount} ${queuedCount === 1 ? "thread" : "threads"}`}
+                </button>
+              )}
             </div>
           </div>
 
@@ -448,49 +496,14 @@ export function BulkTriageWorkbench({
               background: "var(--app-surface)",
             }}
           >
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "26px 1.6fr 0.9fr 0.9fr 1fr",
-                padding: "10px 14px",
-                background: "var(--app-surface-2)",
-                borderBottom: "1px solid var(--border)",
-                fontFamily: "var(--font-mono)",
-                fontSize: 10.5,
-                letterSpacing: "0.1em",
-                textTransform: "uppercase",
-                color: "var(--text-3)",
-                fontWeight: 600,
-              }}
-            >
-              <span />
-              <span>File</span>
-              <span>Detected</span>
-              <span>Assignee</span>
-              <span>State</span>
-            </div>
             {rows.map((row, i) => (
               <FileRow
                 key={i}
                 row={row}
                 peers={peers}
-                disabled={processing}
-                onToggle={(sel) =>
-                  setRows((prev) => {
-                    if (!prev) return prev;
-                    const next = [...prev];
-                    next[i] = { ...next[i], selected: sel };
-                    return next;
-                  })
-                }
-                onAssign={(peerId) =>
-                  setRows((prev) => {
-                    if (!prev) return prev;
-                    const next = [...prev];
-                    next[i] = { ...next[i], assignedTo: peerId };
-                    return next;
-                  })
-                }
+                disabled={analyzing || filing}
+                onReassign={(peerId) => reassignRow(i, peerId)}
+                onFile={() => fileRow(i)}
               />
             ))}
           </div>
@@ -504,83 +517,144 @@ function FileRow({
   row,
   peers,
   disabled,
-  onToggle,
-  onAssign,
+  onReassign,
+  onFile,
 }: {
   row: Row;
   peers: Peer[];
   disabled: boolean;
-  onToggle: (selected: boolean) => void;
-  onAssign: (peerId: string) => void;
+  onReassign: (peerId: string) => void;
+  onFile: () => void;
 }) {
   const isError = row.parsed.status === "error";
+  const headerLine =
+    row.state.kind === "analyzed"
+      ? row.state.headline ?? `${row.parsed.status === "error" ? "?" : row.parsed.detectedFormat} · ${row.parsed.status === "ok" ? row.parsed.turnCount : "?"} turns`
+      : row.parsed.status === "error"
+        ? row.parsed.error
+        : `${row.parsed.detectedFormat} · ${row.parsed.status === "ok" ? `${row.parsed.turnCount} turns` : "needs LLM format"}`;
+
   return (
     <div
       style={{
-        display: "grid",
-        gridTemplateColumns: "26px 1.6fr 0.9fr 0.9fr 1fr",
-        padding: "10px 14px",
+        padding: "14px 18px",
         borderBottom: "1px solid var(--border)",
-        alignItems: "center",
         opacity: isError ? 0.7 : 1,
       }}
     >
-      <input
-        type="checkbox"
-        checked={row.selected}
-        disabled={disabled || isError}
-        onChange={(e) => onToggle(e.target.checked)}
-      />
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            color: "var(--text-1)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {row.parsed.name}
-        </div>
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
-            color: "var(--text-3)",
-            letterSpacing: "0.04em",
-          }}
-        >
-          {row.parsed.status === "error" ? row.parsed.error : `${row.parsed.size} bytes`}
-        </div>
-      </div>
       <div
         style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: 11,
-          color: row.parsed.status === "error" ? "var(--accent)" : "var(--text-2)",
+          display: "grid",
+          gridTemplateColumns: "1fr auto",
+          gap: 18,
+          alignItems: "center",
         }}
       >
-        {row.parsed.status === "ok"
-          ? `${row.parsed.detectedFormat} · ${row.parsed.turnCount} turns`
-          : row.parsed.status === "needs-llm-format"
-            ? `${row.parsed.detectedFormat} · LLM`
-            : "skipped"}
-      </div>
-      <div>
-        {!isError && (
-          <PeerSelect
-            peers={peers}
-            value={row.assignedTo}
-            onChange={onAssign}
-            disabled={disabled}
-          />
-        )}
-      </div>
-      <div>
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--text-3)",
+              letterSpacing: "0.04em",
+              marginBottom: 4,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {row.parsed.name}
+          </div>
+          <div
+            style={{
+              fontFamily: row.state.kind === "analyzed" ? "var(--font-serif)" : "var(--font-mono)",
+              fontSize: row.state.kind === "analyzed" ? 14 : 12,
+              color: "var(--text-1)",
+              lineHeight: 1.4,
+            }}
+          >
+            {headerLine}
+          </div>
+          {row.state.kind === "analyzed" && row.state.apolloLine && (
+            <div
+              style={{
+                marginTop: 6,
+                fontFamily: "var(--font-serif)",
+                fontStyle: "italic",
+                fontSize: 13,
+                color: "var(--text-2)",
+                lineHeight: 1.5,
+                paddingLeft: 12,
+                borderLeft: "2px solid var(--accent)",
+              }}
+            >
+              {row.state.apolloLine}
+            </div>
+          )}
+        </div>
         <RowStatus state={row.state} />
       </div>
+
+      {row.state.kind === "analyzed" && (
+        <div
+          style={{
+            marginTop: 10,
+            display: "grid",
+            gridTemplateColumns: "auto 1fr auto",
+            gap: 12,
+            alignItems: "center",
+            background: "var(--app-surface-2)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "8px 10px",
+          }}
+        >
+          <SeverityChip severity={row.state.severity} />
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "var(--text-3)",
+                fontWeight: 600,
+                marginBottom: 2,
+              }}
+            >
+              Apollo recommends
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--font-serif)",
+                fontStyle: "italic",
+                fontSize: 13,
+                color: "var(--text-2)",
+                lineHeight: 1.4,
+              }}
+            >
+              {row.state.recommendation.reason}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <PeerSelect
+              peers={peers}
+              value={row.state.assignedTo}
+              onChange={onReassign}
+              disabled={disabled}
+            />
+            <button
+              type="button"
+              onClick={onFile}
+              disabled={disabled}
+              className="btn btn-primary"
+              style={{ height: 30, padding: "0 12px", fontSize: 12 }}
+            >
+              File
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -589,13 +663,11 @@ function PeerSelect({
   peers,
   value,
   onChange,
-  placeholder,
   disabled,
 }: {
   peers: Peer[];
   value: string;
   onChange: (id: string) => void;
-  placeholder?: string;
   disabled?: boolean;
 }) {
   return (
@@ -613,20 +685,35 @@ function PeerSelect({
         borderRadius: 6,
         color: "var(--text-1)",
         minWidth: 0,
-        maxWidth: 200,
+        maxWidth: 220,
       }}
     >
-      {placeholder && (
-        <option value="" disabled>
-          {placeholder}
-        </option>
-      )}
       {peers.map((p) => (
         <option key={p.id} value={p.id}>
           {p.name} · {p.role}
         </option>
       ))}
     </select>
+  );
+}
+
+function SeverityChip({ severity }: { severity: number }) {
+  return (
+    <span
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: 10.5,
+        padding: "4px 10px",
+        background: `var(--sev-${severity})`,
+        color: "white",
+        borderRadius: 4,
+        fontWeight: 700,
+        letterSpacing: "0.04em",
+        whiteSpace: "nowrap",
+      }}
+    >
+      sev {severity} · {severityLabel(severity)}
+    </span>
   );
 }
 
@@ -644,7 +731,7 @@ function RowStatus({ state }: { state: RowState }) {
       </span>
     );
   }
-  if (state.kind === "running") {
+  if (state.kind === "analyzing") {
     return (
       <span
         style={{
@@ -652,13 +739,49 @@ function RowStatus({ state }: { state: RowState }) {
           fontSize: 11,
           color: "var(--warn)",
           letterSpacing: "0.04em",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
         }}
       >
         <Spinner /> {state.stage}
       </span>
     );
   }
-  if (state.kind === "done") {
+  if (state.kind === "analyzed") {
+    return (
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 10.5,
+          padding: "3px 8px",
+          background: "var(--accent-soft)",
+          color: "var(--accent)",
+          border: "1px solid var(--accent)",
+          borderRadius: 4,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          fontWeight: 700,
+        }}
+      >
+        ready to file
+      </span>
+    );
+  }
+  if (state.kind === "filing") {
+    return (
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          color: "var(--warn)",
+        }}
+      >
+        <Spinner /> filing
+      </span>
+    );
+  }
+  if (state.kind === "filed") {
     return (
       <Link
         href={`/signoffs/${state.signoffId}`}
@@ -725,3 +848,43 @@ function UploadIcon() {
   );
 }
 
+function computeApolloHeader({
+  rows,
+  analyzing,
+  filing,
+  queuedCount,
+  analyzedCount,
+  filedCount,
+  totalReady,
+  parseError,
+}: {
+  rows: Row[] | null;
+  analyzing: boolean;
+  filing: boolean;
+  queuedCount: number;
+  analyzedCount: number;
+  filedCount: number;
+  totalReady: number;
+  parseError: string | null;
+}): string {
+  if (parseError) return "I couldn't read that zip. Try one with the supported file types.";
+  if (!rows) {
+    return "Drop a corpus and I'll triage each thread, then tell you who on the bench should sign each one off.";
+  }
+  if (analyzing) {
+    return "Reading through them now. I'll surface a recommendation as each one finishes.";
+  }
+  if (filing) {
+    return "Filing the approved cases.";
+  }
+  if (filedCount === rows.length) {
+    return "All filed. The peers will see them in their inboxes.";
+  }
+  if (analyzedCount > 0 && queuedCount === 0) {
+    return "Analyzed. Override any assignment that doesn't look right, then file.";
+  }
+  if (queuedCount > 0) {
+    return `${totalReady} ${totalReady === 1 ? "thread" : "threads"} parsed. Run analysis when you're ready.`;
+  }
+  return "Standing by.";
+}

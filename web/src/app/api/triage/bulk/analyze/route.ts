@@ -1,14 +1,13 @@
 /**
- * Bulk-triage processor — runs the full pipeline (format → 6 analysis stages
- * → file signoff) on a single parsed thread. Streams progress as NDJSON so
- * the bulk UI can show per-thread state in real time.
+ * Bulk-triage analyzer — runs format + 6 analysis stages on a single
+ * parsed thread, then Apollo recommends the assignee. Streams progress
+ * as NDJSON. Filing happens client-side via /api/triage/file once the
+ * operator OKs the recommendation.
  */
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { findPeer } from "@/lib/peers";
-import { getCurrentUser } from "@/lib/currentUser";
-import { newSignoffId, writeSignoff, type SignoffRecord } from "@/lib/signoffs";
+import { recommendPeer } from "@/lib/apollo-recommend";
 import {
   FORMAT_SYSTEM,
   STAGES,
@@ -29,8 +28,6 @@ const RequestSchema = z.object({
   fileName: z.string(),
   thread: TriageThreadSchema.nullable(),
   rawText: z.string().nullable(),
-  assignedTo: z.string(),
-  note: z.string().max(1000).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -38,14 +35,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const input = RequestSchema.parse(body);
 
-    if (!findPeer(input.assignedTo)) {
-      return Response.json({ error: `Unknown peer: ${input.assignedTo}` }, { status: 400 });
-    }
     if (!input.thread && !input.rawText) {
       return Response.json({ error: "Need thread or rawText." }, { status: 400 });
     }
 
-    const me = await getCurrentUser();
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -84,23 +77,18 @@ export async function POST(req: NextRequest) {
             send({ type: "stage", name: stage, status: "done" });
           }
 
-          const record: SignoffRecord = {
-            id: newSignoffId(),
-            filedAt: new Date().toISOString(),
-            filedBy: me.id,
+          const recommendation = recommendPeer(results);
+          const verdict = (results.verdict ?? null) as { apolloLine?: string } | null;
+          send({
+            type: "analyzed",
             thread,
             results,
-            trainingPair: null,
-            postmortemMarkdown: null,
-            assignedTo: input.assignedTo,
-            note: input.note,
-            status: "awaiting",
-          };
-          await writeSignoff(record);
-          send({ type: "filed", id: record.id });
+            recommendation,
+            apolloLine: verdict?.apolloLine ?? null,
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          console.error("[/api/triage/bulk/process]", err);
+          console.error("[/api/triage/bulk/analyze]", err);
           send({ type: "error", message });
         } finally {
           controller.close();
@@ -116,7 +104,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
-    console.error("[/api/triage/bulk/process]", err);
+    console.error("[/api/triage/bulk/analyze]", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     return Response.json({ error: message }, { status: 500 });
   }
