@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ApolloLine } from "@/components/ApolloLine";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { listSignoffs, type SignoffRecord } from "@/lib/signoffs";
 import { getCurrentUser } from "@/lib/currentUser";
 import { findPeer, type Peer } from "@/lib/peers";
+import { inboxInsight } from "@/lib/apollo-insights";
 
 export const dynamic = "force-dynamic";
 
@@ -17,19 +19,20 @@ export default async function InboxPage() {
   const mine = signoffs.filter((s) => s.assignedTo === me.id);
   const awaiting = mine.filter((s) => s.status === "awaiting");
   const decided = mine.filter((s) => s.status !== "awaiting").slice(0, 12);
+  const apolloLine = inboxInsight(me, signoffs);
 
   return (
     <AppShell crumbs={[{ label: "My inbox" }]}>
       <header
         style={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-start",
           gap: 14,
           marginBottom: 22,
         }}
       >
         <PeerAvatar peer={me} size={48} />
-        <div>
+        <div style={{ flex: 1 }}>
           <div className="eyebrow" style={{ color: "var(--accent)", marginBottom: 4 }}>
             Signed in · {me.role}
           </div>
@@ -49,6 +52,7 @@ export default async function InboxPage() {
                 ? "1 sign-off awaiting your read."
                 : `${awaiting.length} sign-offs awaiting your read.`}
           </h1>
+          <ApolloLine text={apolloLine} />
         </div>
       </header>
 

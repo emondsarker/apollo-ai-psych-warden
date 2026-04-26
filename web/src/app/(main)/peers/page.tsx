@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { ApolloLine } from "@/components/ApolloLine";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { PEERS, findPeer, type Peer } from "@/lib/peers";
 import { listSignoffs, type SignoffRecord } from "@/lib/signoffs";
 import { getCurrentUser } from "@/lib/currentUser";
+import { peersIndexInsight } from "@/lib/apollo-insights";
 
 export const dynamic = "force-dynamic";
 
@@ -34,19 +36,7 @@ export default async function PeersPage() {
         >
           {PEERS.length} reviewers on the bench.
         </h1>
-        <p
-          style={{
-            margin: "8px 0 0",
-            fontFamily: "var(--font-serif)",
-            fontStyle: "italic",
-            fontSize: 14,
-            color: "var(--text-2)",
-            maxWidth: 620,
-          }}
-        >
-          Click a profile to see their queue. Click your own name in the sidebar
-          to switch identity — the inbox follows you.
-        </p>
+        <ApolloLine text={peersIndexInsight(signoffs)} />
       </header>
 
       <div

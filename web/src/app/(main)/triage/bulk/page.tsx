@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { AppShell } from "@/components/AppShell";
 import { BulkTriageWorkbench } from "@/components/BulkTriageWorkbench";
 import { PEERS } from "@/lib/peers";
-import { getCurrentUser } from "@/lib/currentUser";
 
 export const dynamic = "force-dynamic";
 
@@ -10,8 +9,7 @@ export const metadata: Metadata = {
   title: "Bulk triage",
 };
 
-export default async function BulkTriagePage() {
-  const me = await getCurrentUser();
+export default function BulkTriagePage() {
   return (
     <AppShell
       crumbs={[
@@ -19,7 +17,7 @@ export default async function BulkTriagePage() {
         { label: "Bulk" },
       ]}
     >
-      <BulkTriageWorkbench peers={PEERS} currentUserId={me.id} />
+      <BulkTriageWorkbench peers={PEERS} />
     </AppShell>
   );
 }

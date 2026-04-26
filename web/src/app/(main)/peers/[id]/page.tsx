@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ApolloLine } from "@/components/ApolloLine";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { findPeer } from "@/lib/peers";
 import { listSignoffs, type SignoffRecord } from "@/lib/signoffs";
 import { getCurrentUser } from "@/lib/currentUser";
+import { peerProfileInsight } from "@/lib/apollo-insights";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +77,7 @@ export default async function PeerProfilePage({
           >
             {peer.email}
           </div>
+          <ApolloLine text={peerProfileInsight(peer, signoffs)} />
         </div>
         {isMe ? (
           <span

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { ApolloLine } from "@/components/ApolloLine";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { SignoffActions } from "@/components/SignoffActions";
 import { findPeer } from "@/lib/peers";
@@ -27,6 +28,7 @@ type VerdictData = {
   diagnosis?: string;
   whatShouldHaveHappened?: string;
   apolloVoice?: string;
+  apolloLine?: string;
 };
 
 type FrameData = { domain?: string; setting?: string; redFlags?: string[] };
@@ -60,6 +62,14 @@ export default async function SignoffReviewPage({
   const filedDate = new Date(record.filedAt);
   const flagsByTurn = new Map<number, FailureFlag>();
   for (const f of timeline?.flags ?? []) flagsByTurn.set(f.turnNumber, f);
+
+  const apolloHeadLine = buildHeaderApolloLine({
+    record,
+    verdict,
+    canDecide,
+    isFiler: record.filedBy === me.id,
+    isAssignee: record.assignedTo === me.id,
+  });
 
   return (
     <AppShell
@@ -100,6 +110,16 @@ export default async function SignoffReviewPage({
           {record.id} · filed {filedDate.toISOString().slice(0, 10)}
           {filer ? ` by ${filer.name}` : ""}
         </div>
+        <ApolloLine
+          text={apolloHeadLine}
+          tone={
+            record.status === "approved"
+              ? "success"
+              : record.status === "rejected"
+                ? "warn"
+                : "default"
+          }
+        />
       </header>
 
       <div
@@ -512,6 +532,28 @@ function Pill({
       {children}
     </span>
   );
+}
+
+function buildHeaderApolloLine({
+  record,
+  verdict,
+  canDecide,
+  isFiler,
+  isAssignee,
+}: {
+  record: { status: string; assignedTo: string };
+  verdict: VerdictData | null;
+  canDecide: boolean;
+  isFiler: boolean;
+  isAssignee: boolean;
+}): string {
+  if (verdict?.apolloLine) return verdict.apolloLine;
+  if (canDecide) return "Read it cold first, then decide. The verdict's already on the record.";
+  if (record.status === "approved") return "Signed off. This one's archive-ready.";
+  if (record.status === "rejected") return "Returned. The filer needs to revise before this can ship.";
+  if (isAssignee && record.status === "awaiting") return "This one's on your desk.";
+  if (isFiler) return "Filed and routed. The reviewer takes it from here.";
+  return "Reading along, but you're not on the hook for this one.";
 }
 
 function Paragraph({ label, children }: { label: string; children: React.ReactNode }) {
