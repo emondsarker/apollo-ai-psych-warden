@@ -10,7 +10,6 @@ import { z } from "zod";
 import { recommendPeer } from "@/lib/apollo-recommend";
 import {
   FORMAT_SYSTEM,
-  STAGES,
   STAGE_SCHEMA,
   TriageThreadSchema,
   stageMaxTokens,
@@ -21,6 +20,23 @@ import {
   type TriageThread,
   type ToolJsonAttempt,
 } from "@/lib/triage";
+
+// Dependency-aware execution plan. Stages within a wave can run in parallel;
+// each subsequent wave gets every prior stage's output as context.
+//
+//   wave 1: frame, linguistic-vitals, undertones — all only need the thread
+//   wave 2: psychological-profile               — wants wave-1 outputs
+//   wave 3: failure-timeline                    — wants the profile
+//   wave 4: verdict                             — synthesizes everything
+//
+// 6 sequential Haiku calls collapse to 4 sequential waves with up to 3-way
+// parallelism on wave 1. Rough back-of-envelope: ~30% wall-clock reduction.
+const STAGE_WAVES: TriageStage[][] = [
+  ["frame", "linguistic-vitals", "undertones"],
+  ["psychological-profile"],
+  ["failure-timeline"],
+  ["verdict"],
+];
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -83,11 +99,41 @@ export async function POST(req: NextRequest) {
           }
 
           const results: Record<string, unknown> = {};
-          for (const stage of STAGES) {
-            send({ type: "stage", name: stage, status: "started" });
-            const data = await runStage(stage, thread, results, onAttempt(stage));
-            results[stage] = data;
-            send({ type: "stage", name: stage, status: "done" });
+          for (let waveIdx = 0; waveIdx < STAGE_WAVES.length; waveIdx++) {
+            const wave = STAGE_WAVES[waveIdx];
+            // Snapshot the priors at the start of the wave so every parallel
+            // call inside this wave sees the same context — otherwise stages
+            // in the same wave would race on `results`.
+            const priors = { ...results };
+            for (const stage of wave) {
+              send({ type: "stage", name: stage, status: "started", wave: waveIdx + 1 });
+            }
+            const settled = await Promise.allSettled(
+              wave.map((stage) => runStage(stage, thread, priors, onAttempt(stage))),
+            );
+            // Mirror the per-stage outcome onto the stream and accumulate
+            // results before moving to the next wave. If one stage in the
+            // wave fails we still surface the others' output, then bail.
+            let firstError: unknown = null;
+            for (let i = 0; i < wave.length; i++) {
+              const stage = wave[i];
+              const outcome = settled[i];
+              if (outcome.status === "fulfilled") {
+                results[stage] = outcome.value;
+                send({ type: "stage", name: stage, status: "done" });
+              } else {
+                firstError = firstError ?? outcome.reason;
+                send({
+                  type: "stage",
+                  name: stage,
+                  status: "error",
+                  error: outcome.reason instanceof Error
+                    ? outcome.reason.message
+                    : String(outcome.reason),
+                });
+              }
+            }
+            if (firstError) throw firstError;
           }
 
           const recommendation = recommendPeer(results);

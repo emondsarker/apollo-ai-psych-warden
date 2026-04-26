@@ -73,7 +73,7 @@ type AnalyzedPayload = {
 
 type RowState =
   | { kind: "queued" }
-  | { kind: "analyzing"; stage: string; retry?: RetryInfo }
+  | { kind: "analyzing"; stages: string[]; wave: number; retry?: RetryInfo }
   | ({ kind: "analyzed" } & AnalyzedPayload)
   | ({
       kind: "reviewing";
@@ -232,14 +232,16 @@ export function BulkTriageWorkbench({
         : row.state.kind === "analyzed" || row.state.kind === "reviewed"
           ? row.state.retries
           : 0;
-    updateRow(index, { kind: "analyzing", stage: "starting" });
+    updateRow(index, { kind: "analyzing", stages: [], wave: 1 });
 
     const body =
       row.parsed.status === "ok"
         ? { fileName: row.parsed.name, thread: row.parsed.thread, rawText: null }
         : { fileName: row.parsed.name, thread: null, rawText: row.parsed.rawText };
 
-    let currentStage = "starting";
+    let inFlight = new Set<string>();
+    let currentWave = 1;
+    let lastStageStarted = "starting";
     let retryCount = 0;
     try {
       const res = await fetch("/api/triage/bulk/analyze", {
@@ -268,6 +270,7 @@ export function BulkTriageWorkbench({
             name?: string;
             status?: string;
             stage?: string;
+            wave?: number;
             attempt?: number;
             model?: string;
             reason?: string;
@@ -283,14 +286,30 @@ export function BulkTriageWorkbench({
           } catch {
             continue;
           }
-          if (event.type === "stage" && event.status === "started") {
-            currentStage = event.name ?? "?";
-            updateRow(index, { kind: "analyzing", stage: currentStage });
+          if (event.type === "stage" && event.status === "started" && event.name) {
+            inFlight = new Set(inFlight);
+            inFlight.add(event.name);
+            lastStageStarted = event.name;
+            if (event.wave) currentWave = event.wave;
+            updateRow(index, {
+              kind: "analyzing",
+              stages: [...inFlight],
+              wave: currentWave,
+            });
+          } else if (event.type === "stage" && event.status === "done" && event.name) {
+            inFlight = new Set(inFlight);
+            inFlight.delete(event.name);
+            updateRow(index, {
+              kind: "analyzing",
+              stages: inFlight.size > 0 ? [...inFlight] : [lastStageStarted],
+              wave: currentWave,
+            });
           } else if (event.type === "retry" && event.attempt && event.model && event.reason) {
             retryCount += 1;
             updateRow(index, {
               kind: "analyzing",
-              stage: event.stage ?? currentStage,
+              stages: inFlight.size > 0 ? [...inFlight] : [event.stage ?? lastStageStarted],
+              wave: currentWave,
               retry: {
                 attempt: event.attempt,
                 model: event.model,
@@ -320,7 +339,7 @@ export function BulkTriageWorkbench({
     } catch (e) {
       updateRow(index, {
         kind: "error",
-        message: humanizeError(e, currentStage),
+        message: humanizeError(e, lastStageStarted),
         phase: "analyze",
         retries: priorRetries + 1,
       });
@@ -1029,6 +1048,12 @@ function RowStatus({
     );
   }
   if (state.kind === "analyzing") {
+    const stageLabel =
+      state.stages.length === 0
+        ? "starting"
+        : state.stages.length === 1
+          ? state.stages[0]
+          : `${state.stages.length}× parallel`;
     return (
       <span
         style={{
@@ -1040,8 +1065,10 @@ function RowStatus({
           alignItems: "center",
           gap: 6,
         }}
+        title={state.stages.join(" · ") || undefined}
       >
-        <Spinner /> {state.stage}
+        <Spinner /> {stageLabel}
+        <span style={{ fontSize: 10, color: "var(--text-3)" }}>· wave {state.wave}/4</span>
         {state.retry && (
           <span
             style={{
