@@ -79,12 +79,15 @@ export function IdentitySwitcher({ current }: { current: Peer }) {
             bottom: "calc(100% + 6px)",
             left: 6,
             right: 6,
-            background: "var(--app-surface)",
-            border: "1px solid var(--border)",
+            background: "white",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            border: "1px solid var(--border-strong)",
             borderRadius: 10,
-            boxShadow: "0 14px 40px oklch(20% 0.02 250 / 0.18), 0 2px 6px oklch(20% 0.02 250 / 0.08)",
+            boxShadow:
+              "0 14px 40px oklch(20% 0.02 250 / 0.28), 0 2px 6px oklch(20% 0.02 250 / 0.12)",
             padding: 6,
-            zIndex: 40,
+            zIndex: 100,
           }}
         >
           <div
@@ -93,8 +96,9 @@ export function IdentitySwitcher({ current }: { current: Peer }) {
               fontSize: 9.5,
               letterSpacing: "0.14em",
               textTransform: "uppercase",
-              color: "var(--text-3)",
+              color: "#3a3a3a",
               padding: "6px 8px 4px",
+              fontWeight: 600,
             }}
           >
             Switch profile
@@ -128,8 +132,8 @@ export function IdentitySwitcher({ current }: { current: Peer }) {
                     style={{
                       fontFamily: "var(--font-sans)",
                       fontSize: 13,
-                      fontWeight: 600,
-                      color: "var(--text-1)",
+                      fontWeight: 700,
+                      color: "#0a0a0a",
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -141,7 +145,7 @@ export function IdentitySwitcher({ current }: { current: Peer }) {
                     style={{
                       fontFamily: "var(--font-mono)",
                       fontSize: 10.5,
-                      color: "var(--text-3)",
+                      color: "#4a4a4a",
                       letterSpacing: "0.02em",
                       whiteSpace: "nowrap",
                       overflow: "hidden",

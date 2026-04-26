@@ -60,6 +60,40 @@ type ParsedFile =
 
 type RetryInfo = { attempt: number; model: string; reason: string };
 
+// How many threads can be in flight simultaneously through the bulk
+// pipeline. 3 keeps peak Anthropic call count at ~9 (3 threads × 3
+// concurrent wave-1 stages each), which stays well clear of standard
+// per-org rate limits while making the demo feel snappy on screen.
+const BULK_CONCURRENCY = 3;
+
+/**
+ * Run `worker` over every item with at most `concurrency` in-flight at any
+ * moment. Pure worker-pool — items are claimed by atomic counter so each
+ * worker pulls the next index when it's free, regardless of how long the
+ * previous one took. Errors inside a worker bubble up; tail items keep
+ * processing because each call is fire-and-forget through the pool.
+ */
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const lanes = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      try {
+        await worker(items[idx]);
+      } catch {
+        // Per-worker errors are surfaced via the row state machine; don't
+        // let one bad thread stop the others in the pool.
+      }
+    }
+  });
+  await Promise.all(lanes);
+}
+
 type AnalyzedPayload = {
   thread: TriageThread;
   results: Record<string, unknown>;
@@ -158,19 +192,16 @@ export function BulkTriageWorkbench({
       const targets = rows
         .map((r, i) => ({ r, i }))
         .filter(({ r }) => r.parsed.status !== "error" && r.state.kind === "queued");
-      // Sequential — each thread is 6 LLM stages, parallel would saturate.
-      for (const { i } of targets) {
+      // Up to BULK_CONCURRENCY threads in flight at once. Each thread already
+      // runs its own analysis stages in waves with up to 3-way parallelism
+      // on wave 1, so peak Anthropic call count is BULK_CONCURRENCY × 3.
+      await runWithConcurrency(targets, BULK_CONCURRENCY, async ({ i }) => {
         await analyzeOne(i);
-        if (autopilotRef.current) {
-          // Pipeline keeps moving: review then file without waiting on the
-          // operator. If any step errors, the row stays errored and the next
-          // thread proceeds — we don't want one bad row to halt a batch.
-          if (peekKind(i) === "analyzed") {
-            await reviewOne(i);
-            if (peekKind(i) === "reviewed") await fileRow(i);
-          }
+        if (autopilotRef.current && peekKind(i) === "analyzed") {
+          await reviewOne(i);
+          if (peekKind(i) === "reviewed") await fileRow(i);
         }
-      }
+      });
     } finally {
       setAnalyzing(false);
       if (autopilotRef.current) router.refresh();
@@ -184,10 +215,10 @@ export function BulkTriageWorkbench({
       const targets = (rowsRef.current ?? [])
         .map((r, i) => ({ r, i }))
         .filter(({ r }) => r.state.kind === "analyzed");
-      for (const { i } of targets) {
+      await runWithConcurrency(targets, BULK_CONCURRENCY, async ({ i }) => {
         await reviewOne(i);
         if (peekKind(i) === "reviewed") await fileRow(i);
-      }
+      });
     } finally {
       setAnalyzing(false);
       router.refresh();
@@ -208,8 +239,8 @@ export function BulkTriageWorkbench({
       const targets = (rowsRef.current ?? [])
         .map((r, i) => ({ r, i }))
         .filter(({ r }) => r.state.kind === "error");
-      for (const { i, r } of targets) {
-        if (r.state.kind !== "error") continue;
+      await runWithConcurrency(targets, BULK_CONCURRENCY, async ({ i, r }) => {
+        if (r.state.kind !== "error") return;
         // We can't resume from a file-phase error without the analyzed
         // payload; nudge the operator to re-analyze from scratch.
         await analyzeOne(i);
@@ -217,7 +248,7 @@ export function BulkTriageWorkbench({
           await reviewOne(i);
           if (peekKind(i) === "reviewed") await fileRow(i);
         }
-      }
+      });
     } finally {
       setAnalyzing(false);
     }
