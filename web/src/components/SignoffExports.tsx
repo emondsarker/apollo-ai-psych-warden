@@ -3,16 +3,15 @@
 import { useState } from "react";
 
 /**
- * Two after-signoff actions on /signoffs/[id]:
- *   • Save report as PDF — opens /signoffs/[id]/print?auto=1 in a new
- *     window, which generates the postmortem if missing then auto-fires
- *     the print dialog.
- *   • Download training pair — POSTs the generate endpoint, downloads
- *     the response as a JSONL file.
+ * After-signoff actions on /signoffs/[id]:
+ *   • Save report as PDF
+ *   • Download training pair (.jsonl)
+ *   • Download case bundle (.zip) — full kit for a single case,
+ *     including 3 register variants of the chosen response
  *
- * Both are visible at all times once the page loads, regardless of
- * sign-off status — the operator might want a draft report before
- * approval, or the training pair from a returned case for revision.
+ * All three are visible at all times — operator might want a draft
+ * report before approval, or the corrected training data from a
+ * returned case for revision.
  */
 export function SignoffExports({
   signoffId,
@@ -23,7 +22,7 @@ export function SignoffExports({
   hasPostmortem: boolean;
   hasTrainingPair: boolean;
 }) {
-  const [busy, setBusy] = useState<"pdf" | "training" | null>(null);
+  const [busy, setBusy] = useState<"pdf" | "training" | "bundle" | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   function openPrint() {
@@ -60,6 +59,35 @@ export function SignoffExports({
       const a = document.createElement("a");
       a.href = url;
       a.download = `${signoffId}.jsonl`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function downloadCaseBundle() {
+    if (busy) return;
+    setBusy("bundle");
+    setErr(null);
+    try {
+      const res = await fetch(
+        `/api/signoffs/${encodeURIComponent(signoffId)}/export`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${signoffId}-bundle.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -155,6 +183,33 @@ export function SignoffExports({
         Contrastive DPO/SFT pair: failed turn → corrected response, with rationale citations.
       </div>
 
+      <button
+        type="button"
+        onClick={downloadCaseBundle}
+        disabled={busy !== null}
+        className="btn btn-ghost"
+        style={{ height: 36, padding: "0 14px", justifyContent: "flex-start" }}
+      >
+        <ZipIcon />
+        <span style={{ marginLeft: 8 }}>
+          {busy === "bundle" ? "Bundling…" : "Download case bundle (.zip)"}
+        </span>
+      </button>
+      <div
+        style={{
+          fontFamily: "var(--font-serif)",
+          fontStyle: "italic",
+          fontSize: 12,
+          color: "var(--text-3)",
+          lineHeight: 1.4,
+          marginTop: -4,
+          marginLeft: 2,
+        }}
+      >
+        Full kit: transcript, analysis, postmortem, AI lineage, primary pair
+        + three register variants (terse, warm, directive).
+      </div>
+
       {err && (
         <div
           style={{
@@ -208,6 +263,26 @@ function JsonIcon() {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <polyline points="7 10 12 15 17 10" />
       <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
+function ZipIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 8v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h11l6 6z" />
+      <polyline points="13 2 13 9 20 9" />
+      <path d="M8 5v2M8 9v2M8 13v2M8 17v2" strokeLinecap="round" />
     </svg>
   );
 }

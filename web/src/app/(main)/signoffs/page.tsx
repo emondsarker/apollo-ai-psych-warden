@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ApolloLine } from "@/components/ApolloLine";
+import { CorpusExportButton } from "@/components/CorpusExportButton";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { listSignoffs, type SignoffRecord } from "@/lib/signoffs";
 import { findPeer } from "@/lib/peers";
@@ -85,6 +86,15 @@ export default async function SignoffsPage({
           active={status === "rejected"}
         />
       </nav>
+
+      {(counts.approved > 0 || counts.rejected > 0) && (
+        <div style={{ marginBottom: 16 }}>
+          <CorpusExportButton
+            approvedCount={counts.approved}
+            decidedCount={counts.approved + counts.rejected}
+          />
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <p
