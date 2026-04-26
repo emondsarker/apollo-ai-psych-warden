@@ -1,6 +1,7 @@
 /**
- * Soft vignette over everything — pulls focus into the center, gives the
- * footage a little of the dot-matrix-print vibe of the app itself.
+ * Soft warm vignette — tints the corners just enough that the eye settles
+ * toward the center without making the page feel grey. Matches the app's
+ * paper-shade rule color at low alpha.
  */
 export const Vignette: React.FC = () => {
   return (
@@ -10,7 +11,7 @@ export const Vignette: React.FC = () => {
         inset: 0,
         pointerEvents: "none",
         background:
-          "radial-gradient(ellipse at center, transparent 55%, oklch(8% 0.02 250 / 0.55) 100%)",
+          "radial-gradient(ellipse at center, transparent 60%, oklch(72% 0.012 60 / 0.10) 100%)",
       }}
     />
   );

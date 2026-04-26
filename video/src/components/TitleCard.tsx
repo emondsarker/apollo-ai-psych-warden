@@ -1,8 +1,9 @@
 import { spring, useCurrentFrame, useVideoConfig } from "remotion";
 
 /**
- * Centered title card. line1 is large serif display; line2 is small mono
- * body. Used for the hook, the close, and any pure-text intercut.
+ * Centered title card — paper-light. line1 is large display serif in
+ * ink-display navy; line2 is a small mono caption in stamp red. Used for
+ * the audit-gap bridge and the closing motto.
  */
 export const TitleCard: React.FC<{ line1: string; line2?: string }> = ({
   line1,
@@ -36,7 +37,7 @@ export const TitleCard: React.FC<{ line1: string; line2?: string }> = ({
             fontWeight: 600,
             lineHeight: 1.05,
             letterSpacing: "-0.018em",
-            color: "#fafaf7",
+            color: "oklch(12% 0.020 250)",
             opacity: reveal,
             transform: `translateY(${(1 - reveal) * 18}px)`,
           }}
@@ -49,10 +50,10 @@ export const TitleCard: React.FC<{ line1: string; line2?: string }> = ({
               marginTop: 28,
               fontFamily:
                 'ui-monospace, "JetBrains Mono", "IBM Plex Mono", monospace',
-              fontSize: 24,
+              fontSize: 22,
               letterSpacing: "0.18em",
               textTransform: "uppercase",
-              color: "oklch(75% 0.012 250)",
+              color: "oklch(52% 0.22 16)",
               opacity: reveal,
             }}
           >
