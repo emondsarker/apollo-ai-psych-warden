@@ -8,7 +8,11 @@ import path from "path";
 import { z } from "zod";
 import { TriageThreadSchema } from "./triage";
 
-const SIGNOFFS_DIR = path.join(process.cwd(), "content", "signoffs");
+// Seed cases live in the deployment bundle (read-only on Vercel).
+const SEED_DIR = path.join(process.cwd(), "content", "signoffs");
+// Vercel only allows writes to /tmp at runtime; locally we use the seed dir
+// directly so dev work commits cleanly.
+const WRITE_DIR = process.env.VERCEL ? "/tmp/primum-signoffs" : SEED_DIR;
 
 // AI peer-review payload — populated when a case goes through auto-review.
 // Mirrors lib/peer-agents.ts AiReviewRecord shape; kept loose here so the
@@ -58,35 +62,46 @@ export const SignoffRecordSchema = z.object({
 export type SignoffRecord = z.infer<typeof SignoffRecordSchema>;
 
 export async function writeSignoff(record: SignoffRecord): Promise<void> {
-  await fs.mkdir(SIGNOFFS_DIR, { recursive: true });
+  await fs.mkdir(WRITE_DIR, { recursive: true });
   await fs.writeFile(
-    path.join(SIGNOFFS_DIR, `${record.id}.json`),
+    path.join(WRITE_DIR, `${record.id}.json`),
     JSON.stringify(record, null, 2),
     "utf-8",
   );
 }
 
-export async function listSignoffs(): Promise<SignoffRecord[]> {
+async function readDir(dir: string): Promise<SignoffRecord[]> {
   try {
-    const files = await fs.readdir(SIGNOFFS_DIR);
+    const files = await fs.readdir(dir);
     const records = await Promise.all(
       files
         .filter((f) => f.endsWith(".json"))
         .map(async (f) => {
           try {
-            const text = await fs.readFile(path.join(SIGNOFFS_DIR, f), "utf-8");
+            const text = await fs.readFile(path.join(dir, f), "utf-8");
             return SignoffRecordSchema.parse(JSON.parse(text));
           } catch {
             return null;
           }
         }),
     );
-    return records
-      .filter((r): r is SignoffRecord => r !== null)
-      .sort((a, b) => (a.filedAt < b.filedAt ? 1 : -1));
+    return records.filter((r): r is SignoffRecord => r !== null);
   } catch {
     return [];
   }
+}
+
+export async function listSignoffs(): Promise<SignoffRecord[]> {
+  const dirs = WRITE_DIR === SEED_DIR ? [SEED_DIR] : [SEED_DIR, WRITE_DIR];
+  const groups = await Promise.all(dirs.map(readDir));
+  // Writable dir takes precedence so updated decisions overwrite seed copies.
+  const byId = new Map<string, SignoffRecord>();
+  for (const group of groups) {
+    for (const record of group) byId.set(record.id, record);
+  }
+  return Array.from(byId.values()).sort((a, b) =>
+    a.filedAt < b.filedAt ? 1 : -1,
+  );
 }
 
 export function newSignoffId(): string {
@@ -95,14 +110,22 @@ export function newSignoffId(): string {
   return `triage-${stamp}-${rand}`;
 }
 
-export async function getSignoff(id: string): Promise<SignoffRecord | null> {
-  if (!/^[a-z0-9-]+$/i.test(id)) return null;
+async function readOne(dir: string, id: string): Promise<SignoffRecord | null> {
   try {
-    const text = await fs.readFile(path.join(SIGNOFFS_DIR, `${id}.json`), "utf-8");
+    const text = await fs.readFile(path.join(dir, `${id}.json`), "utf-8");
     return SignoffRecordSchema.parse(JSON.parse(text));
   } catch {
     return null;
   }
+}
+
+export async function getSignoff(id: string): Promise<SignoffRecord | null> {
+  if (!/^[a-z0-9-]+$/i.test(id)) return null;
+  if (WRITE_DIR !== SEED_DIR) {
+    const fromWrite = await readOne(WRITE_DIR, id);
+    if (fromWrite) return fromWrite;
+  }
+  return readOne(SEED_DIR, id);
 }
 
 export async function updateSignoffDecision(
