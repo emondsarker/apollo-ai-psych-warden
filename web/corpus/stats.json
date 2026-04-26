@@ -1,0 +1,15 @@
+{
+  "totalCases": 3,
+  "exportedPairs": 1,
+  "skippedNoFailurePoint": 0,
+  "skippedNoCorrection": 2,
+  "skippedNotApproved": 0,
+  "skippedNoFailedTurn": 0,
+  "bySeverity": {
+    "3": 1
+  },
+  "byCategory": {
+    "delusion-reinforcement": 1,
+    "sycophantic-si-validation": 1
+  }
+}

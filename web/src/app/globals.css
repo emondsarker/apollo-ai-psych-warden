@@ -1,0 +1,1193 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Primum design tokens
+   White paper, red-pink accent, dot-matrix treatment for AI-generated text.
+   The aesthetic split: editorial voice (serif) frames the work; the AI's
+   own outputs (transcripts, failed responses) print in dot-matrix as if
+   pulled off a 9-pin printer.
+   See DESIGN.md at project root for the full system.
+────────────────────────────────────────────────────────────────────────── */
+
+@theme inline {
+  --color-paper:        oklch(99% 0.002 60);
+  --color-paper-dim:    oklch(97% 0.004 60);
+  --color-paper-shade:  oklch(94% 0.006 60);
+  --color-rule:         oklch(88% 0.008 60);
+  --color-rule-strong:  oklch(72% 0.012 60);
+
+  --color-ink:          oklch(20% 0.015 250);
+  --color-ink-display:  oklch(12% 0.020 250);
+  --color-ink-quiet:    oklch(45% 0.012 250);
+  --color-ink-faint:    oklch(62% 0.010 250);
+
+  --color-sev-0:        oklch(70% 0.06 150);
+  --color-sev-1:        oklch(75% 0.11 80);
+  --color-sev-2:        oklch(65% 0.18 35);
+  --color-sev-3:        oklch(55% 0.22 18);
+  --color-sev-4:        oklch(45% 0.24 14);
+
+  --color-stamp:        oklch(52% 0.22 16);
+  --color-stamp-soft:   oklch(70% 0.18 14);
+  --color-jade:         oklch(48% 0.10 165);
+
+  --font-serif: var(--font-source-serif), "Iowan Old Style", Georgia, serif;
+  --font-mono:  var(--font-ibm-plex-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans:  var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-matrix: var(--font-vt323), "VT323", ui-monospace, monospace;
+}
+
+:root {
+  /* Surfaces — paper-white, faintly tinted */
+  --paper:         oklch(99% 0.002 60);
+  --paper-dim:     oklch(97% 0.004 60);
+  --paper-shade:   oklch(94% 0.006 60);
+  --rule:          oklch(88% 0.008 60);
+  --rule-strong:   oklch(72% 0.012 60);
+
+  /* Type — ink-navy */
+  --ink:           oklch(20% 0.015 250);
+  --ink-display:   oklch(12% 0.020 250);
+  --ink-quiet:     oklch(45% 0.012 250);
+  --ink-faint:     oklch(62% 0.010 250);
+
+  /* Severity — pink-red gradient */
+  --sev-0: oklch(70% 0.06 150);
+  --sev-1: oklch(75% 0.11 80);
+  --sev-2: oklch(65% 0.18 35);
+  --sev-3: oklch(55% 0.22 18);
+  --sev-4: oklch(45% 0.24 14);
+
+  /* Authority — saturated pink-red accent */
+  --stamp:         oklch(52% 0.22 16);
+  --stamp-fade:    oklch(52% 0.22 16 / 0.78);
+  --stamp-soft:    oklch(70% 0.18 14);
+  --stamp-bg:      oklch(96% 0.025 14);
+  --jade:          oklch(48% 0.10 165);
+  --jade-soft:     oklch(78% 0.045 165);
+  --jade-bg:       oklch(96% 0.020 165);
+
+  /* Legacy aliases — preserved so older components keep rendering */
+  --bone:          var(--paper);
+  --bone-2:        var(--paper-dim);
+  --ink-2:         var(--ink);
+  --margin:        var(--ink-quiet);
+  --oxblood:       var(--stamp);
+  --oxblood-q:     var(--stamp-fade);
+
+  /* ─── App-shell tokens (new direction) ───
+     Workbench surface system: cool off-white app bg, pure-white surfaces,
+     near-black ink. The accent stays pink-red for severity/state, but the
+     chrome itself is calm. */
+  --app-bg:        oklch(98.5% 0.002 250);
+  --app-surface:   oklch(100% 0 0);
+  --app-surface-2: oklch(97% 0.003 250);
+  --app-sidebar:   oklch(99% 0.003 250);
+  --app-elev:      0 1px 0 oklch(85% 0.008 250 / 0.6);
+  --app-shadow:    0 1px 2px oklch(20% 0.02 250 / 0.04), 0 4px 16px oklch(20% 0.02 250 / 0.04);
+
+  --border:        oklch(91% 0.005 250);
+  --border-strong: oklch(82% 0.008 250);
+  --border-focus:  oklch(52% 0.22 16);
+
+  --text-1:        oklch(18% 0.020 250);
+  --text-2:        oklch(38% 0.015 250);
+  --text-3:        oklch(58% 0.012 250);
+  --text-inv:      oklch(99% 0.002 250);
+
+  --brand-ink:     oklch(14% 0.018 250);
+  --accent:        oklch(52% 0.22 16);
+  --accent-soft:   oklch(96% 0.025 14);
+  --success:       oklch(48% 0.10 165);
+  --success-soft:  oklch(95% 0.025 165);
+  --warn:          oklch(60% 0.16 70);
+  --warn-soft:     oklch(96% 0.04 80);
+
+  --radius-sm: 4px;
+  --radius:    8px;
+  --radius-lg: 12px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  font-family: var(--font-sans);
+  color: var(--ink);
+  min-height: 100dvh;
+}
+
+a {
+  color: inherit;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--rule-strong);
+  transition: text-decoration-color 120ms ease-out, color 120ms ease-out;
+}
+
+a:hover {
+  text-decoration-color: var(--stamp);
+  color: var(--ink-display);
+}
+
+sup a {
+  color: var(--stamp);
+  text-decoration: none;
+  font-size: 0.72em;
+  font-family: var(--font-serif);
+}
+
+::selection {
+  background: var(--stamp);
+  color: var(--paper);
+}
+
+:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Reusable atoms
+────────────────────────────────────────────────────────────────────────── */
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+}
+
+.label-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+}
+
+.serif-display {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--ink-display);
+}
+
+.hairline {
+  height: 1px;
+  background: var(--rule);
+  border: 0;
+}
+
+.hairline-strong {
+  height: 1px;
+  background: var(--ink-display);
+  border: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Dot-matrix treatment for AI-generated content
+   Applied to anything the target model produced, or where the AI's words
+   are the subject of analysis. The text uses a CRT-era pixel font; the
+   surface gets a halftone dot pattern under the type so it reads like
+   tractor-feed print pulled off a 9-pin printer.
+────────────────────────────────────────────────────────────────────────── */
+
+.matrix {
+  font-family: var(--font-matrix);
+  font-size: 1.35em;
+  line-height: 1.25;
+  letter-spacing: 0.02em;
+  color: var(--ink-display);
+  font-feature-settings: "ss01";
+}
+
+.matrix-block {
+  position: relative;
+  background: var(--paper);
+  background-image:
+    radial-gradient(circle, oklch(45% 0.04 250 / 0.10) 0.7px, transparent 0.9px);
+  background-size: 4px 4px;
+  background-position: 0 0;
+  border: 1px solid var(--rule-strong);
+  padding: 18px 22px;
+  font-family: var(--font-matrix);
+  font-size: 1.25em;
+  line-height: 1.3;
+  letter-spacing: 0.015em;
+  color: var(--ink-display);
+  white-space: pre-wrap;
+  position: relative;
+}
+
+/* Tractor-feed perforation strip (decorative) on the left edge */
+.matrix-block::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: -10px;
+  width: 8px;
+  background-image: radial-gradient(
+    circle,
+    var(--paper) 2px,
+    transparent 2.5px
+  );
+  background-size: 8px 14px;
+  background-color: var(--paper-shade);
+  border-radius: 1px;
+  opacity: 0.7;
+}
+
+/* Optional source-tag label that prints above a matrix block */
+.matrix-source-tag {
+  font-family: var(--font-matrix);
+  font-size: 1.05em;
+  letter-spacing: 0.05em;
+  color: var(--stamp);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  display: inline-block;
+}
+
+/* Severity scale rendered as a 5×3 dot matrix — each "lit" position is a
+   filled dot; unlit positions are hollow. */
+.dot-matrix-flag {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+}
+.dot-matrix-flag .dm-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dot-matrix-flag .dm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rule);
+}
+.dot-matrix-flag .dm-dot[data-on="true"] {
+  background: currentColor;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Stamps
+────────────────────────────────────────────────────────────────────────── */
+
+@keyframes stampIn {
+  0%   { opacity: 0; transform: rotate(-14deg) scale(1.1); }
+  60%  { opacity: 1; }
+  100% { opacity: 1; transform: rotate(var(--stamp-rot, -3deg)) scale(1); }
+}
+
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 5px;
+  border: 1.5px solid currentColor;
+  outline: 1.5px solid currentColor;
+  outline-offset: 2px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--stamp);
+  background: transparent;
+  transform: rotate(var(--stamp-rot, -3deg));
+  animation: stampIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  user-select: none;
+}
+
+.stamp[data-tone="jade"]   { color: var(--jade); }
+.stamp[data-tone="ink"]    { color: var(--ink-display); }
+.stamp[data-tone="quiet"]  { color: var(--ink-quiet); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Severity flag — segmented bar (legacy)
+────────────────────────────────────────────────────────────────────────── */
+
+.sev-flag {
+  display: inline-flex;
+  gap: 2px;
+  align-items: stretch;
+}
+.sev-flag span {
+  display: block;
+  width: 14px;
+  height: 8px;
+  background: var(--rule);
+  border-radius: 1px;
+}
+.sev-flag span[data-lit="0"] { background: var(--sev-0); }
+.sev-flag span[data-lit="1"] { background: var(--sev-1); }
+.sev-flag span[data-lit="2"] { background: var(--sev-2); }
+.sev-flag span[data-lit="3"] { background: var(--sev-3); }
+.sev-flag span[data-lit="4"] { background: var(--sev-4); }
+
+/* Hover states */
+
+.archive-entry {
+  cursor: pointer;
+}
+.archive-entry:hover {
+  background: var(--stamp-bg);
+}
+
+.sev-cell:hover {
+  filter: brightness(1.06) saturate(1.1);
+  transform: scale(1.04);
+  z-index: 1;
+}
+
+.filing-row {
+  transition: background 120ms ease-out;
+}
+.filing-row:hover {
+  background: var(--paper-dim);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Responsive overrides
+   Inline styles take priority over class rules, so the breakpoint overrides
+   below use !important. The base inline grids are designed for desktop;
+   these collapse them to single columns on tablet/mobile.
+────────────────────────────────────────────────────────────────────────── */
+
+/* ──────────────────────────────────────────────────────────────────────────
+   App-shell components (new direction): inputs, buttons, pills.
+   These don't replace the editorial atoms above — they live alongside them
+   and will gradually take over as pages migrate to the workbench shell.
+────────────────────────────────────────────────────────────────────────── */
+
+.field-label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+
+.input {
+  display: block;
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--text-1);
+  background: var(--app-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+.input::placeholder {
+  color: var(--text-3);
+}
+.input:hover {
+  border-color: var(--border-strong);
+}
+.input:focus,
+.input:focus-visible {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px oklch(52% 0.22 16 / 0.16);
+  outline: none;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 16px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out, transform 80ms ease-out;
+  user-select: none;
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--brand-ink);
+  color: var(--text-inv);
+  border-color: var(--brand-ink);
+}
+.btn-primary:hover:not(:disabled) {
+  background: oklch(8% 0.020 250);
+}
+
+.btn-ghost {
+  background: var(--app-surface);
+  color: var(--text-1);
+  border-color: var(--border);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--app-surface-2);
+  border-color: var(--border-strong);
+}
+
+.btn-block { width: 100%; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--app-surface-2);
+  color: var(--text-2);
+}
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill[data-tone="accent"]  { color: var(--accent);  background: var(--accent-soft);  }
+.pill[data-tone="success"] { color: var(--success); background: var(--success-soft); }
+.pill[data-tone="warn"]    { color: var(--warn);    background: var(--warn-soft);    }
+.pill[data-tone="muted"]   { color: var(--text-2); background: var(--app-surface-2); }
+
+.divider-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.divider-or::before,
+.divider-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Workbench surfaces (cards, tables, sidebar, topbar)
+────────────────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--app-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--app-shadow);
+}
+.card-pad   { padding: 20px; }
+.card-pad-lg{ padding: 24px 28px; }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.card-title {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-1);
+  margin: 0;
+}
+.card-sub {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-3);
+  margin: 0;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--app-surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  letter-spacing: 0;
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-1);
+}
+.tbl thead th {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  text-align: left;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--app-surface-2);
+}
+.tbl tbody td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+.tbl tbody tr:hover td {
+  background: var(--app-surface-2);
+}
+
+.log-row:hover {
+  background: var(--app-surface-2);
+}
+.tbl .col-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.tbl .col-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Sidebar nav items */
+.side-section {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 0 12px;
+  margin: 18px 0 6px;
+}
+.side-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  margin: 0 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  text-decoration: none;
+  border-radius: 6px;
+  transition: background 100ms ease-out, color 100ms ease-out;
+}
+.side-link:hover {
+  background: var(--app-surface-2);
+  color: var(--text-1);
+}
+.side-link[data-active="true"] {
+  background: var(--app-surface-2);
+  color: var(--text-1);
+  font-weight: 600;
+}
+.side-link[data-active="true"] .side-icon {
+  color: var(--accent);
+}
+.side-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.side-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 12px 6px 0;
+  background: var(--app-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.workspace-switch:hover {
+  border-color: var(--border-strong);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Apollo sidebar (non-dashboard pages)
+   The avatar fills the entire sidebar as a living background; a permanent
+   frosted-glass film sits between him and the nav so labels stay legible;
+   the nav re-themes to dark mode by overriding the local CSS tokens.
+────────────────────────────────────────────────────────────────────────── */
+
+.sidebar-apollo-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 110% 70% at 50% 30%,
+      oklch(13% 0.03 250) 0%,
+      oklch(6% 0.018 250) 70%),
+    oklch(4% 0.012 250);
+}
+
+.sidebar-apollo-glass {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(2.4px) saturate(112%) brightness(0.94);
+  backdrop-filter: blur(2.4px) saturate(112%) brightness(0.94);
+  background:
+    linear-gradient(180deg,
+      oklch(8% 0.02 250 / 0.40) 0%,
+      oklch(8% 0.02 250 / 0.18) 32%,
+      oklch(8% 0.02 250 / 0.45) 100%),
+    radial-gradient(ellipse 100% 55% at 50% 28%,
+      oklch(72% 0.18 16 / 0.07) 0%,
+      transparent 60%);
+}
+
+.sidebar-foreground {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* Dark-theme token overrides — the existing inline styles all read
+   through these vars, so the rest of the sidebar inherits the new palette
+   without touching component code. */
+.app-sidebar[data-with-apollo="true"] {
+  --text-1: oklch(96% 0.005 250);
+  --text-2: oklch(82% 0.012 250);
+  --text-3: oklch(66% 0.012 250);
+  --border: oklch(95% 0.005 250 / 0.14);
+  --border-strong: oklch(95% 0.005 250 / 0.28);
+  --app-surface-2: oklch(95% 0.005 250 / 0.08);
+}
+
+/* Glassy nav links */
+.app-sidebar[data-with-apollo="true"] .side-link {
+  background: transparent;
+  color: oklch(80% 0.012 250);
+}
+.app-sidebar[data-with-apollo="true"] .side-link:hover {
+  background: oklch(95% 0.005 250 / 0.10);
+  color: oklch(96% 0.008 250);
+}
+.app-sidebar[data-with-apollo="true"] .side-link[data-active="true"] {
+  background: oklch(95% 0.005 250 / 0.14);
+  color: oklch(96% 0.008 250);
+  box-shadow:
+    inset 0 0 0 1px oklch(72% 0.20 16 / 0.45),
+    0 4px 14px oklch(0% 0 0 / 0.30);
+}
+.app-sidebar[data-with-apollo="true"] .side-link[data-active="true"] .side-icon {
+  color: oklch(76% 0.20 16);
+}
+.app-sidebar[data-with-apollo="true"] .side-icon {
+  color: oklch(72% 0.012 250);
+}
+
+/* Workspace switch + brand block stay legible on dark */
+.app-sidebar[data-with-apollo="true"] .workspace-switch {
+  background: oklch(95% 0.005 250 / 0.06);
+  border-color: oklch(95% 0.005 250 / 0.16);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+  backdrop-filter: blur(8px) saturate(140%);
+}
+.app-sidebar[data-with-apollo="true"] .workspace-switch:hover {
+  border-color: oklch(95% 0.005 250 / 0.30);
+  background: oklch(95% 0.005 250 / 0.10);
+}
+
+/* Severity dot — used in tables instead of stamp icons */
+.sev-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+.sev-dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sev-dot[data-level="0"] { color: oklch(60% 0.012 250); }
+.sev-dot[data-level="1"] { color: oklch(58% 0.10 165); }
+.sev-dot[data-level="2"] { color: oklch(60% 0.16 70); }
+.sev-dot[data-level="3"] { color: oklch(56% 0.20 30); }
+.sev-dot[data-level="4"] { color: var(--accent); }
+
+/* App shell layout (desktop) */
+.app-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100dvh;
+  background: var(--app-bg);
+}
+.app-shell-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app-sidebar {
+  background: var(--app-sidebar);
+  border-right: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 56px;
+  padding: 0 28px;
+  background: var(--app-bg);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: saturate(140%) blur(6px);
+}
+.app-content {
+  padding: 28px 28px 80px;
+  max-width: 1280px;
+  margin: 0 auto;
+  width: 100%;
+}
+.app-content[data-full-bleed="true"] {
+  padding: 0;
+  max-width: none;
+  margin: 0;
+  flex: 1;
+  min-height: calc(100dvh - 56px);
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr !important;
+  }
+  .app-sidebar {
+    display: none !important;
+  }
+  .app-topbar {
+    padding: 0 16px !important;
+  }
+  .app-content {
+    padding: 20px 16px 80px !important;
+  }
+  .kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .dash-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .kpi-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 980px) {
+  .meta-sidebar {
+    position: static !important;
+  }
+  .comp-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Login page: brand pane is fixed-width on desktop, collapses to a compact
+   top strip on tablet/mobile (form gets the focus). */
+@media (max-width: 980px) {
+  .login-page {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto 1fr;
+  }
+  .login-brand-pane {
+    min-height: auto !important;
+    padding: 28px 28px 32px !important;
+  }
+  .login-brand-pane h1 {
+    font-size: clamp(24px, 5vw, 30px) !important;
+  }
+  /* On compact widths, drop the secondary brand-side detail (stats, footer
+     links) — the form is the priority. */
+  .login-brand-pane .brand-stats,
+  .login-brand-pane .brand-footer {
+    display: none !important;
+  }
+  .login-form-pane {
+    padding: 36px 24px 48px !important;
+  }
+  .login-form-topbar {
+    position: static !important;
+    margin-bottom: 24px;
+    text-align: right;
+  }
+}
+
+@media (max-width: 640px) {
+  .login-brand-pane {
+    padding: 24px 20px 28px !important;
+  }
+  .login-form-pane {
+    padding: 28px 20px 40px !important;
+  }
+  .login-brand-pane h1 {
+    font-size: 24px !important;
+  }
+  .login-brand-pane p {
+    font-size: 14px !important;
+  }
+}
+
+@media (max-width: 980px) {
+  /* Hero strips: title + aside stack vertically. */
+  .resp-hero {
+    grid-template-columns: 1fr !important;
+    gap: 32px !important;
+    align-items: start !important;
+  }
+  .resp-hero > aside,
+  .resp-hero > .resp-hero-aside {
+    align-items: flex-start !important;
+  }
+  .resp-hero > aside dl,
+  .resp-hero > .resp-hero-aside dl {
+    max-width: none !important;
+  }
+
+  /* Two-column dashboard grids stack. */
+  .resp-2col {
+    grid-template-columns: 1fr !important;
+    gap: 48px !important;
+  }
+
+  /* Pipeline / target rows give back the right-hand stage column. */
+  .resp-pipeline-row {
+    grid-template-columns: 48px minmax(0, 1fr) !important;
+    gap: 16px !important;
+  }
+  .resp-pipeline-row > :nth-child(3),
+  .resp-pipeline-row > :nth-child(4) {
+    grid-column: 2 !important;
+  }
+  .resp-pipeline-row > :nth-child(4) {
+    text-align: left !important;
+    padding-top: 0 !important;
+  }
+
+  /* Header masthead: ISSN block hides, wordmark left-aligned. */
+  .resp-masthead {
+    grid-template-columns: auto 1fr !important;
+  }
+  .resp-masthead > :nth-child(1) {
+    display: none !important;
+  }
+  .resp-masthead > :nth-child(2) {
+    text-align: left !important;
+  }
+  .resp-masthead > :nth-child(3) {
+    text-align: right !important;
+    font-size: 10px !important;
+  }
+
+  /* Case header collapses to one column of fields, no aside. */
+  .resp-case-header {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+  }
+  .resp-case-header dl {
+    grid-template-columns: auto 1fr !important;
+  }
+
+  /* Severity matrix horizontal scroll already enabled on the parent. */
+
+  /* Transcript turn: collapse the 3-col grid; annotation drops below. */
+  .resp-turn {
+    grid-template-columns: 1fr !important;
+  }
+  .resp-turn > aside {
+    grid-column: 1 !important;
+    border-left: none !important;
+    border-top: 1px solid var(--rule) !important;
+    padding-left: 0 !important;
+    padding-top: 14px !important;
+    margin-top: 18px !important;
+  }
+
+  /* Comparison block stacks. */
+  .resp-compare {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Footer columns stack and left-align. */
+  .resp-footer {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+  .resp-footer > * {
+    text-align: left !important;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Reduce horizontal padding on small screens. */
+  main {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+  .resp-masthead,
+  .resp-nav-inner,
+  .resp-footer-inner {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
+  /* Status panel stat ledger: smaller numbers. */
+  .resp-stat-tiles {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 16px 24px !important;
+  }
+  .resp-stat-row {
+    gap: 16px !important;
+  }
+
+  /* Failure taxonomy two-column → one-column. */
+  .resp-tax-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Severity scale row: shrink left columns. */
+  .resp-sev-row td:first-child {
+    padding-right: 12px !important;
+  }
+
+  /* Case archive entry: drop date column, stack severity. */
+  .resp-archive-entry {
+    grid-template-columns: 60px 1fr !important;
+    gap: 12px !important;
+  }
+  .resp-archive-entry > :nth-child(3),
+  .resp-archive-entry > :nth-child(4) {
+    grid-column: 2 !important;
+    text-align: left !important;
+    padding-top: 8px !important;
+  }
+
+  /* Filing row on landing: collapse case-num column. */
+  .resp-filing-row {
+    grid-template-columns: 48px 1fr auto !important;
+    gap: 10px !important;
+  }
+
+  /* Nav: reduce gap and let it wrap. */
+  .resp-nav {
+    flex-wrap: wrap !important;
+    gap: 16px !important;
+    font-size: 11px !important;
+  }
+}
+
+/* ─── Triage workbench ─────────────────────────────────────────────────── */
+.triage-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: triage-spin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes triage-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Triage streaming cursor ──────────────────────────────────────────── */
+@keyframes triage-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ─── Triage post-mortem print ─────────────────────────────────────────── */
+@media print {
+  body.triage-printing * {
+    visibility: hidden;
+  }
+  body.triage-printing .print-target,
+  body.triage-printing .print-target * {
+    visibility: visible;
+  }
+  body.triage-printing .print-target {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 32px;
+    overflow: visible !important;
+    max-height: none !important;
+    color: #000 !important;
+    background: #fff !important;
+    font-family: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+    font-size: 11pt;
+    line-height: 1.55;
+  }
+  body.triage-printing .print-target a {
+    color: #1a4dad !important;
+    text-decoration: underline;
+  }
+}
+
+/* ─── Triage intake cards ──────────────────────────────────────────────── */
+.intake-card:hover {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+}
+.intake-card:active {
+  transform: translateY(1px);
+}
+
+/* ─── Sidebar Apollo speech ───────────────────────────────────────────── */
+.sidebar-apollo-speech {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 92px;
+  z-index: 3;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 15px;
+  line-height: 1.45;
+  color: white;
+  text-shadow:
+    0 1px 8px oklch(8% 0.02 250 / 0.7),
+    0 0 22px oklch(8% 0.02 250 / 0.45);
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.005em;
+}
+.apollo-word {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(8px);
+  filter: blur(3px);
+  animation: apollo-word-in 540ms cubic-bezier(0.18, 0.7, 0.2, 1) forwards;
+  will-change: opacity, transform, filter;
+}
+@keyframes apollo-word-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(3px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* ─── Streaming structure reveal ──────────────────────────────────────── */
+.stream-reveal {
+  animation: stream-fade-in 320ms ease-out;
+}
+@keyframes stream-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
