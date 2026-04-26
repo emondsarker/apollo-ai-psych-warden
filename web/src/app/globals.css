@@ -1191,6 +1191,79 @@ sup a {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ─── Print-friendly case report ──────────────────────────────────────── */
+.print-report {
+  background: #fbf8f1;
+  color: #101015;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 64px;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.62;
+}
+.print-report-body h1,
+.print-report-body h2,
+.print-report-body h3 {
+  font-family: var(--font-serif);
+  color: #101015;
+  margin-top: 28px;
+  margin-bottom: 8px;
+  letter-spacing: -0.005em;
+  font-weight: 600;
+}
+.print-report-body h1 { font-size: 24px; }
+.print-report-body h2 { font-size: 18px; }
+.print-report-body h3 { font-size: 14.5px; }
+.print-report-body p { margin: 8px 0; }
+.print-report-body ul,
+.print-report-body ol { padding-left: 22px; margin: 8px 0; }
+.print-report-body blockquote {
+  margin: 14px 0;
+  padding: 8px 14px;
+  border-left: 3px solid #a6324a;
+  background: #f4ede1;
+  font-style: italic;
+}
+.print-report-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: #efe9da;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.print-report-body pre {
+  background: #efe9da;
+  padding: 10px 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.print-report-body table {
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12.5px;
+}
+.print-report-body th,
+.print-report-body td {
+  border: 1px solid #d4cfc1;
+  padding: 6px 10px;
+  text-align: left;
+}
+@media print {
+  body { background: white !important; }
+  .print-report {
+    padding: 0;
+    background: white;
+    max-width: none;
+  }
+  .print-report-body {
+    page-break-inside: auto;
+  }
+  .print-report-body h2 {
+    page-break-after: avoid;
+  }
+}
+
 /* ─── Apollo's per-page line ──────────────────────────────────────────── */
 .apollo-page-line {
   position: relative;

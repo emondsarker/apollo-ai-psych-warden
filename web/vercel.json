@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "src/app/api/triage/bulk/analyze/route.ts": { "maxDuration": 300 },
+    "src/app/api/triage/auto-review/route.ts": { "maxDuration": 300 },
+    "src/app/api/triage/analyze/route.ts": { "maxDuration": 300 },
+    "src/app/api/triage/postmortem/route.ts": { "maxDuration": 120 },
+    "src/app/api/triage/training-set/route.ts": { "maxDuration": 120 },
+    "src/app/api/signoffs/[id]/postmortem/route.ts": { "maxDuration": 120 },
+    "src/app/api/signoffs/[id]/training/route.ts": { "maxDuration": 120 }
+  }
+}

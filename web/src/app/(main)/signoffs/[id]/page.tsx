@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { ApolloLine } from "@/components/ApolloLine";
 import { PeerAvatar } from "@/components/PeerAvatar";
 import { SignoffActions } from "@/components/SignoffActions";
+import { SignoffExports } from "@/components/SignoffExports";
 import { findPeer } from "@/lib/peers";
 import { getSignoff } from "@/lib/signoffs";
 import { getCurrentUser } from "@/lib/currentUser";
@@ -448,6 +449,12 @@ export default async function SignoffReviewPage({
             decisionNote={record.decisionNote}
             decidedByName={decider?.name}
             decidedAt={record.decidedAt}
+          />
+
+          <SignoffExports
+            signoffId={record.id}
+            hasPostmortem={Boolean(record.postmortemMarkdown)}
+            hasTrainingPair={record.trainingPair != null}
           />
         </aside>
       </div>
