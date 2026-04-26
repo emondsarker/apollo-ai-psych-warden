@@ -10,6 +10,31 @@ import { TriageThreadSchema } from "./triage";
 
 const SIGNOFFS_DIR = path.join(process.cwd(), "content", "signoffs");
 
+// AI peer-review payload — populated when a case goes through auto-review.
+// Mirrors lib/peer-agents.ts AiReviewRecord shape; kept loose here so the
+// signoffs module doesn't import the agents module.
+export const AiReviewSchema = z.object({
+  juniorPeerId: z.string(),
+  juniorDecision: z.object({
+    decision: z.enum(["approved", "returned", "escalated"]),
+    note: z.string(),
+    reasoning: z.string(),
+  }),
+  directorPeerId: z.string().optional(),
+  directorDecision: z
+    .object({
+      decision: z.enum(["approved", "returned"]),
+      note: z.string(),
+      reasoning: z.string(),
+    })
+    .optional(),
+  finalDecision: z.enum(["approved", "returned", "rejected"]),
+  finalNote: z.string(),
+  finalDeciderPeerId: z.string(),
+  model: z.string(),
+  decidedAt: z.string(),
+});
+
 export const SignoffRecordSchema = z.object({
   id: z.string(),
   filedAt: z.string(),
@@ -24,6 +49,7 @@ export const SignoffRecordSchema = z.object({
   decidedAt: z.string().optional(),
   decidedBy: z.string().optional(),
   decisionNote: z.string().optional(),
+  aiReview: AiReviewSchema.optional(),
 });
 
 export type SignoffRecord = z.infer<typeof SignoffRecordSchema>;

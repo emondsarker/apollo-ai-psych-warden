@@ -302,6 +302,8 @@ export default async function SignoffReviewPage({
             </div>
           </Section>
 
+          {record.aiReview && <AiReviewSection review={record.aiReview} />}
+
           {record.postmortemMarkdown && (
             <Section title="Case report">
               <details
@@ -531,6 +533,203 @@ function Pill({
     >
       {children}
     </span>
+  );
+}
+
+function AiReviewSection({
+  review,
+}: {
+  review: NonNullable<Awaited<ReturnType<typeof import("@/lib/signoffs").getSignoff>>>["aiReview"];
+}) {
+  if (!review) return null;
+  const junior = findPeer(review.juniorPeerId);
+  const director = review.directorPeerId ? findPeer(review.directorPeerId) : null;
+  const finalPeer = findPeer(review.finalDeciderPeerId);
+  const finalToneBg =
+    review.finalDecision === "approved"
+      ? "var(--success-soft)"
+      : "var(--accent-soft)";
+  const finalToneColor =
+    review.finalDecision === "approved" ? "var(--success)" : "var(--accent)";
+  return (
+    <Section title="AI peer review">
+      <div
+        style={{
+          background: "var(--app-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              color: "var(--text-3)",
+              fontWeight: 600,
+            }}
+          >
+            Decided by
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--font-sans)",
+              fontSize: 14,
+              fontWeight: 600,
+              color: "var(--text-1)",
+            }}
+          >
+            {finalPeer?.name ?? review.finalDeciderPeerId}
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              padding: "3px 8px",
+              borderRadius: 4,
+              background: finalToneBg,
+              color: finalToneColor,
+              border: `1px solid ${finalToneColor}`,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              fontWeight: 700,
+            }}
+          >
+            {review.finalDecision}
+          </span>
+          <span
+            style={{
+              marginLeft: "auto",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10.5,
+              color: "var(--text-3)",
+              letterSpacing: "0.04em",
+            }}
+          >
+            {review.model}
+          </span>
+        </div>
+
+        <PeerDecisionBlock
+          peer={junior}
+          role="junior"
+          decision={review.juniorDecision}
+        />
+        {director && review.directorDecision && (
+          <PeerDecisionBlock
+            peer={director}
+            role="director"
+            decision={review.directorDecision}
+          />
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function PeerDecisionBlock({
+  peer,
+  role,
+  decision,
+}: {
+  peer: ReturnType<typeof findPeer>;
+  role: "junior" | "director";
+  decision: { decision: string; note: string; reasoning: string };
+}) {
+  if (!peer) return null;
+  const tone =
+    decision.decision === "approved"
+      ? { color: "var(--success)", bg: "var(--success-soft)" }
+      : decision.decision === "escalated"
+        ? { color: "var(--warn)", bg: "var(--warn-soft)" }
+        : { color: "var(--accent)", bg: "var(--accent-soft)" };
+  return (
+    <div
+      style={{
+        background: "var(--app-surface-2)",
+        border: "1px solid var(--border)",
+        borderLeft: `3px solid ${tone.color}`,
+        borderRadius: 6,
+        padding: "10px 12px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 6,
+        }}
+      >
+        <PeerAvatar peer={peer} size={22} />
+        <span
+          style={{
+            fontFamily: "var(--font-sans)",
+            fontSize: 13,
+            fontWeight: 600,
+            color: "var(--text-1)",
+          }}
+        >
+          {peer.name}
+        </span>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 9.5,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            color: "var(--text-3)",
+          }}
+        >
+          {role}
+        </span>
+        <span
+          style={{
+            marginLeft: "auto",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            padding: "2px 7px",
+            borderRadius: 4,
+            background: tone.bg,
+            color: tone.color,
+            border: `1px solid ${tone.color}`,
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
+            fontWeight: 700,
+          }}
+        >
+          {decision.decision}
+        </span>
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--font-serif)",
+          fontSize: 14,
+          color: "var(--text-1)",
+          lineHeight: 1.55,
+          marginBottom: 6,
+        }}
+      >
+        {decision.note}
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--font-serif)",
+          fontStyle: "italic",
+          fontSize: 13,
+          color: "var(--text-2)",
+          lineHeight: 1.5,
+        }}
+      >
+        {decision.reasoning}
+      </div>
+    </div>
   );
 }
 

@@ -24,7 +24,14 @@ function headlineOf(s: SignoffRecord): string {
 export function inboxInsight(me: Peer, signoffs: SignoffRecord[]): string {
   const mine = signoffs.filter((s) => s.assignedTo === me.id);
   const awaiting = mine.filter((s) => s.status === "awaiting");
+  // AI-decided cases that the operator might want to audit.
+  const aiDecided = mine.filter(
+    (s) => s.status !== "awaiting" && s.aiReview && s.aiReview.finalDeciderPeerId === me.id,
+  );
   if (awaiting.length === 0) {
+    if (aiDecided.length > 0) {
+      return `Empty queue, ${firstName(me)}. Auto-pilot already closed ${aiDecided.length} ${aiDecided.length === 1 ? "case" : "cases"} on your behalf — worth spot-checking.`;
+    }
     const recent = mine.filter((s) => s.status !== "awaiting").slice(0, 1);
     if (recent.length) {
       return `Inbox is empty, ${firstName(me)}. Last call you made was on ${shortId(recent[0].id)}.`;

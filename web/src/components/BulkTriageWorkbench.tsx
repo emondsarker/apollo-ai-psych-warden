@@ -4,10 +4,33 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApolloLine } from "./ApolloLine";
-import type { Peer } from "@/lib/peers";
+import { PeerAvatar } from "./PeerAvatar";
+import { findPeer, type Peer } from "@/lib/peers";
 import type { Recommendation } from "@/lib/apollo-recommend";
 import type { TriageThread } from "@/lib/triage";
 import { severityLabel } from "@/lib/triage";
+
+type AiPeerDecision = {
+  decision: "approved" | "returned" | "escalated";
+  note: string;
+  reasoning: string;
+};
+type AiDirectorDecision = {
+  decision: "approved" | "returned";
+  note: string;
+  reasoning: string;
+};
+type AiReviewRecord = {
+  juniorPeerId: string;
+  juniorDecision: AiPeerDecision;
+  directorPeerId?: string;
+  directorDecision?: AiDirectorDecision;
+  finalDecision: "approved" | "returned" | "rejected";
+  finalNote: string;
+  finalDeciderPeerId: string;
+  model: string;
+  decidedAt: string;
+};
 
 type ParsedFile =
   | {
@@ -37,23 +60,41 @@ type ParsedFile =
 
 type RetryInfo = { attempt: number; model: string; reason: string };
 
+type AnalyzedPayload = {
+  thread: TriageThread;
+  results: Record<string, unknown>;
+  recommendation: Recommendation;
+  assignedTo: string;
+  apolloLine: string | null;
+  severity: number;
+  headline: string | null;
+  retries: number;
+};
+
 type RowState =
   | { kind: "queued" }
   | { kind: "analyzing"; stage: string; retry?: RetryInfo }
+  | ({ kind: "analyzed" } & AnalyzedPayload)
+  | ({
+      kind: "reviewing";
+      phase: "junior" | "director";
+      peerId: string;
+      juniorDecision?: AiPeerDecision;
+    } & AnalyzedPayload)
+  | ({
+      kind: "reviewed";
+      review: AiReviewRecord;
+    } & AnalyzedPayload)
+  | { kind: "filing" }
   | {
-      kind: "analyzed";
-      thread: TriageThread;
-      results: Record<string, unknown>;
-      recommendation: Recommendation;
+      kind: "filed";
+      signoffId: string;
       assignedTo: string;
-      apolloLine: string | null;
       severity: number;
       headline: string | null;
-      retries: number;
+      review?: AiReviewRecord;
     }
-  | { kind: "filing" }
-  | { kind: "filed"; signoffId: string; assignedTo: string; severity: number; headline: string | null }
-  | { kind: "error"; message: string; phase: "analyze" | "file"; retries: number };
+  | { kind: "error"; message: string; phase: "analyze" | "review" | "file"; retries: number };
 
 type Row = {
   parsed: ParsedFile;
@@ -73,6 +114,12 @@ export function BulkTriageWorkbench({
   const [dragging, setDragging] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [filing, setFiling] = useState(false);
+  const [autopilot, setAutopilot] = useState(false);
+  // Mirror autopilot in a ref so async loops don't capture stale closures.
+  const autopilotRef = useRef(autopilot);
+  useEffect(() => {
+    autopilotRef.current = autopilot;
+  }, [autopilot]);
 
   async function uploadFile(file: File) {
     setBusy(true);
@@ -114,10 +161,44 @@ export function BulkTriageWorkbench({
       // Sequential — each thread is 6 LLM stages, parallel would saturate.
       for (const { i } of targets) {
         await analyzeOne(i);
+        if (autopilotRef.current) {
+          // Pipeline keeps moving: review then file without waiting on the
+          // operator. If any step errors, the row stays errored and the next
+          // thread proceeds — we don't want one bad row to halt a batch.
+          if (peekKind(i) === "analyzed") {
+            await reviewOne(i);
+            if (peekKind(i) === "reviewed") await fileRow(i);
+          }
+        }
       }
     } finally {
       setAnalyzing(false);
+      if (autopilotRef.current) router.refresh();
     }
+  }
+
+  async function reviewAllAnalyzed() {
+    if (!rows || analyzing || filing) return;
+    setAnalyzing(true);
+    try {
+      const targets = (rowsRef.current ?? [])
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.state.kind === "analyzed");
+      for (const { i } of targets) {
+        await reviewOne(i);
+        if (peekKind(i) === "reviewed") await fileRow(i);
+      }
+    } finally {
+      setAnalyzing(false);
+      router.refresh();
+    }
+  }
+
+  // Helper that re-reads the row's current state kind without TypeScript
+  // narrowing it across await boundaries (which would otherwise lock subsequent
+  // comparisons into a stale type after the first comparison).
+  function peekKind(i: number): RowState["kind"] | undefined {
+    return rowsRef.current?.[i]?.state.kind;
   }
 
   async function retryAllFailed() {
@@ -129,10 +210,12 @@ export function BulkTriageWorkbench({
         .filter(({ r }) => r.state.kind === "error");
       for (const { i, r } of targets) {
         if (r.state.kind !== "error") continue;
-        if (r.state.phase === "file") {
-          await fileRow(i);
-        } else {
-          await analyzeOne(i);
+        // We can't resume from a file-phase error without the analyzed
+        // payload; nudge the operator to re-analyze from scratch.
+        await analyzeOne(i);
+        if (autopilotRef.current && peekKind(i) === "analyzed") {
+          await reviewOne(i);
+          if (peekKind(i) === "reviewed") await fileRow(i);
         }
       }
     } finally {
@@ -144,7 +227,11 @@ export function BulkTriageWorkbench({
     const row = rowsRef.current?.[index];
     if (!row || row.parsed.status === "error") return;
     const priorRetries =
-      row.state.kind === "error" ? row.state.retries : row.state.kind === "analyzed" ? row.state.retries : 0;
+      row.state.kind === "error"
+        ? row.state.retries
+        : row.state.kind === "analyzed" || row.state.kind === "reviewed"
+          ? row.state.retries
+          : 0;
     updateRow(index, { kind: "analyzing", stage: "starting" });
 
     const body =
@@ -240,6 +327,91 @@ export function BulkTriageWorkbench({
     }
   }
 
+  async function reviewOne(index: number) {
+    const row = rowsRef.current?.[index];
+    if (!row) return;
+    if (row.state.kind !== "analyzed") return;
+    const payload: AnalyzedPayload = row.state;
+
+    // Seed the row in reviewing state so the UI flips immediately.
+    updateRow(index, {
+      kind: "reviewing",
+      phase: payload.severity >= 4 ? "director" : "junior",
+      peerId: payload.severity >= 4 ? "elena" : payload.assignedTo,
+      ...payload,
+    });
+
+    try {
+      const res = await fetch("/api/triage/auto-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          thread: payload.thread,
+          results: payload.results,
+          assignedTo: payload.assignedTo,
+        }),
+      });
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let juniorDecision: AiPeerDecision | undefined;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          let event: {
+            type: string;
+            peerId?: string;
+            role?: "junior" | "director";
+            decision?: AiPeerDecision | AiDirectorDecision;
+            review?: AiReviewRecord;
+            message?: string;
+          };
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (event.type === "phase" && event.role && event.peerId) {
+            updateRow(index, {
+              kind: "reviewing",
+              phase: event.role,
+              peerId: event.peerId,
+              juniorDecision,
+              ...payload,
+            });
+          } else if (event.type === "decision" && event.role === "junior" && event.decision) {
+            juniorDecision = event.decision as AiPeerDecision;
+          } else if (event.type === "reviewed" && event.review) {
+            updateRow(index, {
+              kind: "reviewed",
+              review: event.review,
+              ...payload,
+            });
+          } else if (event.type === "error" && event.message) {
+            throw new Error(event.message);
+          }
+        }
+      }
+    } catch (e) {
+      updateRow(index, {
+        kind: "error",
+        message: humanizeError(e, "auto-review"),
+        phase: "review",
+        retries: payload.retries + 1,
+      });
+    }
+  }
+
   async function fileRow(index: number) {
     const row = rowsRef.current?.[index];
     if (!row) return;
@@ -249,8 +421,10 @@ export function BulkTriageWorkbench({
       // Caller already removed the analyzed payload; user has to re-analyze.
       return;
     }
-    if (row.state.kind !== "analyzed") return;
-    const { thread, results, assignedTo, severity, headline, recommendation, retries } = row.state;
+    if (row.state.kind !== "analyzed" && row.state.kind !== "reviewed") return;
+    const payload: AnalyzedPayload = row.state;
+    const review = row.state.kind === "reviewed" ? row.state.review : undefined;
+    const { thread, results, assignedTo, severity, headline, recommendation, retries } = payload;
     updateRow(index, { kind: "filing" });
     try {
       const res = await fetch("/api/triage/file", {
@@ -263,6 +437,7 @@ export function BulkTriageWorkbench({
           postmortemMarkdown: null,
           assignedTo,
           note: `Bulk-triaged from ${row.parsed.status === "error" ? "?" : row.parsed.name}. ${recommendation.reason}`,
+          aiReview: review,
         }),
       });
       const data = await res.json();
@@ -273,6 +448,7 @@ export function BulkTriageWorkbench({
         assignedTo,
         severity,
         headline,
+        review,
       });
     } catch (e) {
       updateRow(index, {
@@ -332,6 +508,7 @@ export function BulkTriageWorkbench({
   const parseErrCount = rows?.filter((r) => r.parsed.status === "error").length ?? 0;
   const queuedCount = rows?.filter((r) => r.state.kind === "queued" && r.parsed.status !== "error").length ?? 0;
   const analyzedCount = rows?.filter((r) => r.state.kind === "analyzed").length ?? 0;
+  const reviewedCount = rows?.filter((r) => r.state.kind === "reviewed").length ?? 0;
   const filedCount = rows?.filter((r) => r.state.kind === "filed").length ?? 0;
   const failedCount = rows?.filter((r) => r.state.kind === "error").length ?? 0;
   const totalReady = okCount + llmCount;
@@ -344,8 +521,10 @@ export function BulkTriageWorkbench({
     analyzedCount,
     filedCount,
     failedCount,
+    reviewedCount,
     totalReady,
     parseError,
+    autopilot,
   });
 
   return (
@@ -476,6 +655,11 @@ export function BulkTriageWorkbench({
 
       {rows && (
         <>
+          <AutopilotBanner
+            on={autopilot}
+            onToggle={() => setAutopilot((x) => !x)}
+            disabled={analyzing || filing}
+          />
           <div
             style={{
               display: "flex",
@@ -538,7 +722,18 @@ export function BulkTriageWorkbench({
                   Retry {failedCount} failed
                 </button>
               )}
-              {analyzedCount > 0 && (
+              {analyzedCount > 0 && !autopilot && (
+                <button
+                  type="button"
+                  onClick={reviewAllAnalyzed}
+                  disabled={analyzing || filing}
+                  className="btn btn-ghost"
+                  style={{ height: 32, padding: "0 12px", fontSize: 12 }}
+                >
+                  AI-review {analyzedCount}
+                </button>
+              )}
+              {analyzedCount + reviewedCount > 0 && (
                 <button
                   type="button"
                   onClick={fileAllAnalyzed}
@@ -546,7 +741,11 @@ export function BulkTriageWorkbench({
                   className="btn btn-primary"
                   style={{ height: 32, padding: "0 16px", fontSize: 13 }}
                 >
-                  {filing ? `Filing…` : `File ${analyzedCount} ${analyzedCount === 1 ? "case" : "cases"}`}
+                  {filing
+                    ? `Filing…`
+                    : `File ${analyzedCount + reviewedCount} ${
+                        analyzedCount + reviewedCount === 1 ? "case" : "cases"
+                      }`}
                 </button>
               )}
               {queuedCount > 0 && (
@@ -557,7 +756,13 @@ export function BulkTriageWorkbench({
                   className="btn btn-primary"
                   style={{ height: 32, padding: "0 16px", fontSize: 13 }}
                 >
-                  {analyzing ? `Analyzing…` : `Analyze ${queuedCount} ${queuedCount === 1 ? "thread" : "threads"}`}
+                  {analyzing
+                    ? autopilot
+                      ? `Auto-piloting…`
+                      : `Analyzing…`
+                    : autopilot
+                      ? `Auto-triage ${queuedCount} ${queuedCount === 1 ? "thread" : "threads"}`
+                      : `Analyze ${queuedCount} ${queuedCount === 1 ? "thread" : "threads"}`}
                 </button>
               )}
             </div>
@@ -672,6 +877,12 @@ function FileRow({
         </div>
         <RowStatus state={row.state} onRetry={onRetry} disabled={disabled} />
       </div>
+
+      {row.state.kind === "reviewing" && <ReviewingBlock state={row.state} />}
+
+      {row.state.kind === "reviewed" && (
+        <ReviewedBlock state={row.state} disabled={disabled} onFile={onFile} />
+      )}
 
       {row.state.kind === "analyzed" && (
         <div
@@ -880,6 +1091,45 @@ function RowStatus({
       </span>
     );
   }
+  if (state.kind === "reviewing") {
+    return (
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          color: "var(--accent)",
+          letterSpacing: "0.04em",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <Spinner /> {state.phase === "director" ? "director read" : "peer read"}
+      </span>
+    );
+  }
+  if (state.kind === "reviewed") {
+    const tone =
+      state.review.finalDecision === "approved" ? "var(--success)" : "var(--accent)";
+    return (
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 10.5,
+          padding: "3px 8px",
+          background: state.review.finalDecision === "approved" ? "var(--success-soft)" : "var(--accent-soft)",
+          color: tone,
+          border: `1px solid ${tone}`,
+          borderRadius: 4,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          fontWeight: 700,
+        }}
+      >
+        bench: {state.review.finalDecision}
+      </span>
+    );
+  }
   if (state.kind === "filing") {
     return (
       <span
@@ -894,18 +1144,24 @@ function RowStatus({
     );
   }
   if (state.kind === "filed") {
+    const decisionLabel = state.review
+      ? `✓ ${state.review.finalDecision} · ${findPeer(state.review.finalDeciderPeerId)?.name.split(" ").slice(-1)[0] ?? ""} →`
+      : "✓ filed →";
     return (
       <Link
         href={`/signoffs/${state.signoffId}`}
         style={{
           fontFamily: "var(--font-mono)",
           fontSize: 11,
-          color: "var(--success)",
+          color:
+            state.review?.finalDecision === "returned"
+              ? "var(--accent)"
+              : "var(--success)",
           textDecoration: "none",
           fontWeight: 700,
         }}
       >
-        ✓ filed →
+        {decisionLabel}
       </Link>
     );
   }
@@ -936,6 +1192,346 @@ function RowStatus({
         Retry
       </button>
     </span>
+  );
+}
+
+function AutopilotBanner({
+  on,
+  onToggle,
+  disabled,
+}: {
+  on: boolean;
+  onToggle: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        padding: "10px 14px",
+        background: on ? "var(--accent-soft)" : "var(--app-surface-2)",
+        border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`,
+        borderRadius: 10,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        aria-pressed={on}
+        style={{
+          position: "relative",
+          width: 38,
+          height: 22,
+          borderRadius: 11,
+          border: "1px solid var(--border-strong)",
+          background: on ? "var(--accent)" : "var(--app-surface)",
+          cursor: disabled ? "not-allowed" : "pointer",
+          padding: 0,
+          flex: "none",
+        }}
+        aria-label="Toggle auto-pilot"
+      >
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 2,
+            left: on ? 18 : 2,
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            background: "white",
+            transition: "left 140ms ease-out",
+            boxShadow: "0 1px 3px oklch(20% 0.02 250 / 0.25)",
+          }}
+        />
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontFamily: "var(--font-sans)",
+            fontWeight: 600,
+            fontSize: 13,
+            color: on ? "var(--accent)" : "var(--text-1)",
+          }}
+        >
+          Auto-pilot {on ? "engaged" : "off"}
+        </div>
+        <div
+          style={{
+            fontFamily: "var(--font-serif)",
+            fontStyle: "italic",
+            fontSize: 12.5,
+            color: "var(--text-2)",
+            lineHeight: 1.4,
+          }}
+        >
+          {on
+            ? "The bench will analyze, peer-review, and file every thread in one pass. Critical cases route directly to the director."
+            : "You'll review Apollo's recommendation per row before filing. Flip on to let the bench close the loop end-to-end."}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReviewingBlock({
+  state,
+}: {
+  state: Extract<RowState, { kind: "reviewing" }>;
+}) {
+  const peer = findPeer(state.peerId);
+  const phaseLabel = state.phase === "director" ? "Director" : "Peer";
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: "10px 12px",
+        background: "var(--accent-soft)",
+        border: "1px solid var(--accent)",
+        borderRadius: 8,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {peer && <PeerAvatar peer={peer} size={26} />}
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontFamily: "var(--font-sans)",
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--text-1)",
+            }}
+          >
+            {peer?.name ?? state.peerId}
+          </div>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: "var(--text-3)",
+            }}
+          >
+            {phaseLabel} reading
+          </div>
+        </div>
+        <span
+          style={{
+            marginLeft: "auto",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: "var(--accent)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Spinner /> Opus 4.7
+        </span>
+      </div>
+      {state.juniorDecision && (
+        <div
+          style={{
+            paddingLeft: 10,
+            borderLeft: "2px solid var(--warn)",
+            fontFamily: "var(--font-serif)",
+            fontStyle: "italic",
+            fontSize: 12.5,
+            color: "var(--text-2)",
+            lineHeight: 1.5,
+          }}
+        >
+          Escalated to director: {state.juniorDecision.note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReviewedBlock({
+  state,
+  disabled,
+  onFile,
+}: {
+  state: Extract<RowState, { kind: "reviewed" }>;
+  disabled: boolean;
+  onFile: () => void;
+}) {
+  const review = state.review;
+  const junior = findPeer(review.juniorPeerId);
+  const director = review.directorPeerId ? findPeer(review.directorPeerId) : null;
+  const finalToneColor =
+    review.finalDecision === "approved" ? "var(--success)" : "var(--accent)";
+  const finalToneBg =
+    review.finalDecision === "approved" ? "var(--success-soft)" : "var(--accent-soft)";
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: 12,
+        background: "var(--app-surface-2)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+            color: "var(--text-3)",
+            fontWeight: 600,
+          }}
+        >
+          Bench decided
+        </span>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 10.5,
+            padding: "3px 8px",
+            borderRadius: 4,
+            background: finalToneBg,
+            color: finalToneColor,
+            border: `1px solid ${finalToneColor}`,
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
+            fontWeight: 700,
+          }}
+        >
+          {review.finalDecision}
+        </span>
+        <span style={{ marginLeft: "auto" }}>
+          <button
+            type="button"
+            onClick={onFile}
+            disabled={disabled}
+            className="btn btn-primary"
+            style={{ height: 28, padding: "0 12px", fontSize: 12 }}
+          >
+            File
+          </button>
+        </span>
+      </div>
+      <PeerLineage peer={junior} role="junior" decision={review.juniorDecision} />
+      {director && review.directorDecision && (
+        <PeerLineage
+          peer={director}
+          role="director"
+          decision={review.directorDecision}
+        />
+      )}
+    </div>
+  );
+}
+
+function PeerLineage({
+  peer,
+  role,
+  decision,
+}: {
+  peer: Peer | null;
+  role: "junior" | "director";
+  decision: { decision: string; note: string; reasoning: string };
+}) {
+  if (!peer) return null;
+  const tone =
+    decision.decision === "approved"
+      ? { color: "var(--success)", bg: "var(--success-soft)" }
+      : decision.decision === "escalated"
+        ? { color: "var(--warn)", bg: "var(--warn-soft)" }
+        : { color: "var(--accent)", bg: "var(--accent-soft)" };
+  return (
+    <div
+      style={{
+        background: "var(--app-surface)",
+        border: "1px solid var(--border)",
+        borderLeft: `3px solid ${tone.color}`,
+        borderRadius: 6,
+        padding: "8px 10px",
+        display: "flex",
+        gap: 10,
+      }}
+    >
+      <PeerAvatar peer={peer} size={22} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <span
+            style={{
+              fontFamily: "var(--font-sans)",
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: "var(--text-1)",
+            }}
+          >
+            {peer.name}
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: "var(--text-3)",
+            }}
+          >
+            {role}
+          </span>
+          <span
+            style={{
+              marginLeft: "auto",
+              fontFamily: "var(--font-mono)",
+              fontSize: 9.5,
+              padding: "2px 6px",
+              borderRadius: 4,
+              background: tone.bg,
+              color: tone.color,
+              border: `1px solid ${tone.color}`,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              fontWeight: 700,
+            }}
+          >
+            {decision.decision}
+          </span>
+        </div>
+        <div
+          style={{
+            fontFamily: "var(--font-serif)",
+            fontSize: 13,
+            color: "var(--text-1)",
+            lineHeight: 1.5,
+          }}
+        >
+          {decision.note}
+        </div>
+        <div
+          style={{
+            marginTop: 4,
+            fontFamily: "var(--font-serif)",
+            fontStyle: "italic",
+            fontSize: 12,
+            color: "var(--text-2)",
+            lineHeight: 1.45,
+          }}
+        >
+          {decision.reasoning}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1013,40 +1609,54 @@ function computeApolloHeader({
   filing,
   queuedCount,
   analyzedCount,
+  reviewedCount,
   filedCount,
   failedCount,
   totalReady,
   parseError,
+  autopilot,
 }: {
   rows: Row[] | null;
   analyzing: boolean;
   filing: boolean;
   queuedCount: number;
   analyzedCount: number;
+  reviewedCount: number;
   filedCount: number;
   failedCount: number;
   totalReady: number;
   parseError: string | null;
+  autopilot: boolean;
 }): string {
   if (parseError) return "I couldn't read that zip. Try one with the supported file types.";
   if (!rows) {
-    return "Drop a corpus and I'll triage each thread, then tell you who on the bench should sign each one off.";
+    return autopilot
+      ? "Auto-pilot is on. Drop a corpus and the bench will triage, peer-review, and file every thread — I'll narrate as we go."
+      : "Drop a corpus and I'll triage each thread, then tell you who on the bench should sign each one off.";
   }
   if (analyzing) {
+    if (autopilot) return "Running the full pipeline — analysis, peer review, then filing. The bench is reading along with me.";
     return "Reading through them now. If a thread trips on validation I'll re-prompt and, if needed, escalate to Opus 4.7.";
   }
   if (filing) return "Filing the approved cases.";
-  if (failedCount > 0 && queuedCount === 0 && analyzedCount === 0) {
+  if (failedCount > 0 && queuedCount === 0 && analyzedCount === 0 && reviewedCount === 0) {
     return `${failedCount} ${failedCount === 1 ? "thread" : "threads"} broke. Retry them when you're ready — the retries pull in Opus on the second swing.`;
   }
-  if (filedCount === rows.length) return "All filed. The peers will see them in their inboxes.";
+  if (filedCount === rows.length) return "All filed. The peers' decisions are on the record.";
+  if (reviewedCount > 0 && queuedCount === 0 && analyzedCount === 0) {
+    return `${reviewedCount} reviewed. File them to commit the bench's calls.`;
+  }
   if (analyzedCount > 0 && queuedCount === 0) {
     return failedCount > 0
-      ? `${analyzedCount} ready to file, ${failedCount} stuck — retry the broken ones or move on without them.`
-      : "Analyzed. Override any assignment that doesn't look right, then file.";
+      ? `${analyzedCount} ready, ${failedCount} stuck — retry the broken ones or run AI review on the rest.`
+      : autopilot
+        ? "Analyzed. Auto-pilot will hand these to the bench in a moment."
+        : "Analyzed. Override any assignment that doesn't look right, then file — or flip auto-pilot on and let the bench handle it.";
   }
   if (queuedCount > 0) {
-    return `${totalReady} ${totalReady === 1 ? "thread" : "threads"} parsed. Run analysis when you're ready.`;
+    return autopilot
+      ? `${totalReady} ${totalReady === 1 ? "thread" : "threads"} parsed. Hit analyze and the whole pipeline runs unattended.`
+      : `${totalReady} ${totalReady === 1 ? "thread" : "threads"} parsed. Run analysis when you're ready.`;
   }
   return "Standing by.";
 }
