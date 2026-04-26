@@ -15,10 +15,11 @@ import {
   TriageThreadSchema,
   stageMaxTokens,
   stageSystem,
-  toolJson,
+  toolJsonRetry,
   transcriptText,
   type TriageStage,
   type TriageThread,
+  type ToolJsonAttempt,
 } from "@/lib/triage";
 
 export const runtime = "nodejs";
@@ -46,19 +47,31 @@ export async function POST(req: NextRequest) {
           controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
 
         try {
+          const onAttempt = (stage: string) => (info: ToolJsonAttempt) => {
+            send({
+              type: "retry",
+              stage,
+              attempt: info.index + 1,
+              reason: info.reason,
+              model: info.modelUsed,
+              error: info.errorPreview,
+            });
+          };
+
           let thread: TriageThread;
           if (input.thread) {
             thread = input.thread;
             send({ type: "stage", name: "format", status: "skipped" });
           } else {
             send({ type: "stage", name: "format", status: "started" });
-            thread = await toolJson(
+            thread = await toolJsonRetry(
               TriageThreadSchema,
               "emit_canonical_thread",
               "Emit the parsed conversation as a canonical TriageThread JSON object.",
               FORMAT_SYSTEM,
               input.rawText!,
               8000,
+              { retries: 2, onAttempt: onAttempt("format") },
             );
             send({
               type: "stage",
@@ -72,7 +85,7 @@ export async function POST(req: NextRequest) {
           const results: Record<string, unknown> = {};
           for (const stage of STAGES) {
             send({ type: "stage", name: stage, status: "started" });
-            const data = await runStage(stage, thread, results);
+            const data = await runStage(stage, thread, results, onAttempt(stage));
             results[stage] = data;
             send({ type: "stage", name: stage, status: "done" });
           }
@@ -114,6 +127,7 @@ async function runStage(
   stage: TriageStage,
   thread: TriageThread,
   prior: Record<string, unknown>,
+  onAttempt: (info: ToolJsonAttempt) => void,
 ): Promise<unknown> {
   const priorBlob = Object.keys(prior).length
     ? `\n\n—— PRIOR STAGES ——\n${Object.entries(prior)
@@ -128,12 +142,13 @@ ${transcriptText(thread.turns)}${priorBlob}`;
 
   const schema = STAGE_SCHEMA[stage];
   const toolName = `emit_${stage.replace(/-/g, "_")}_stage`;
-  return toolJson(
+  return toolJsonRetry(
     schema,
     toolName,
     `Emit the structured output for the ${stage} stage of triage analysis.`,
     stageSystem(stage),
     userPrompt,
     stageMaxTokens(stage),
+    { retries: 2, onAttempt },
   );
 }

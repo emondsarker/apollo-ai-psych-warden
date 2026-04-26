@@ -35,9 +35,11 @@ type ParsedFile =
       error: string;
     };
 
+type RetryInfo = { attempt: number; model: string; reason: string };
+
 type RowState =
   | { kind: "queued" }
-  | { kind: "analyzing"; stage: string }
+  | { kind: "analyzing"; stage: string; retry?: RetryInfo }
   | {
       kind: "analyzed";
       thread: TriageThread;
@@ -47,10 +49,11 @@ type RowState =
       apolloLine: string | null;
       severity: number;
       headline: string | null;
+      retries: number;
     }
   | { kind: "filing" }
   | { kind: "filed"; signoffId: string; assignedTo: string; severity: number; headline: string | null }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; phase: "analyze" | "file"; retries: number };
 
 type Row = {
   parsed: ParsedFile;
@@ -117,9 +120,31 @@ export function BulkTriageWorkbench({
     }
   }
 
+  async function retryAllFailed() {
+    if (!rows || analyzing || filing) return;
+    setAnalyzing(true);
+    try {
+      const targets = (rowsRef.current ?? [])
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.state.kind === "error");
+      for (const { i, r } of targets) {
+        if (r.state.kind !== "error") continue;
+        if (r.state.phase === "file") {
+          await fileRow(i);
+        } else {
+          await analyzeOne(i);
+        }
+      }
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   async function analyzeOne(index: number) {
     const row = rowsRef.current?.[index];
     if (!row || row.parsed.status === "error") return;
+    const priorRetries =
+      row.state.kind === "error" ? row.state.retries : row.state.kind === "analyzed" ? row.state.retries : 0;
     updateRow(index, { kind: "analyzing", stage: "starting" });
 
     const body =
@@ -127,6 +152,8 @@ export function BulkTriageWorkbench({
         ? { fileName: row.parsed.name, thread: row.parsed.thread, rawText: null }
         : { fileName: row.parsed.name, thread: null, rawText: row.parsed.rawText };
 
+    let currentStage = "starting";
+    let retryCount = 0;
     try {
       const res = await fetch("/api/triage/bulk/analyze", {
         method: "POST",
@@ -153,6 +180,11 @@ export function BulkTriageWorkbench({
             type: string;
             name?: string;
             status?: string;
+            stage?: string;
+            attempt?: number;
+            model?: string;
+            reason?: string;
+            error?: string;
             message?: string;
             thread?: TriageThread;
             results?: Record<string, unknown>;
@@ -165,7 +197,19 @@ export function BulkTriageWorkbench({
             continue;
           }
           if (event.type === "stage" && event.status === "started") {
-            updateRow(index, { kind: "analyzing", stage: event.name ?? "?" });
+            currentStage = event.name ?? "?";
+            updateRow(index, { kind: "analyzing", stage: currentStage });
+          } else if (event.type === "retry" && event.attempt && event.model && event.reason) {
+            retryCount += 1;
+            updateRow(index, {
+              kind: "analyzing",
+              stage: event.stage ?? currentStage,
+              retry: {
+                attempt: event.attempt,
+                model: event.model,
+                reason: event.reason,
+              },
+            });
           } else if (event.type === "analyzed" && event.recommendation && event.thread && event.results) {
             const verdict = (event.results.verdict ?? null) as
               | { overallSeverity?: number; headline?: string }
@@ -179,6 +223,7 @@ export function BulkTriageWorkbench({
               apolloLine: event.apolloLine ?? null,
               severity: verdict?.overallSeverity ?? 0,
               headline: verdict?.headline ?? null,
+              retries: priorRetries + retryCount,
             });
           } else if (event.type === "error" && event.message) {
             throw new Error(event.message);
@@ -188,15 +233,24 @@ export function BulkTriageWorkbench({
     } catch (e) {
       updateRow(index, {
         kind: "error",
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeError(e, currentStage),
+        phase: "analyze",
+        retries: priorRetries + 1,
       });
     }
   }
 
   async function fileRow(index: number) {
     const row = rowsRef.current?.[index];
-    if (!row || row.state.kind !== "analyzed") return;
-    const { thread, results, assignedTo, severity, headline, recommendation } = row.state;
+    if (!row) return;
+    // Retry-from-error path: if we crashed during filing, the prior analysis
+    // is gone but we can't re-analyze either; surface the error and bail.
+    if (row.state.kind === "error" && row.state.phase === "file") {
+      // Caller already removed the analyzed payload; user has to re-analyze.
+      return;
+    }
+    if (row.state.kind !== "analyzed") return;
+    const { thread, results, assignedTo, severity, headline, recommendation, retries } = row.state;
     updateRow(index, { kind: "filing" });
     try {
       const res = await fetch("/api/triage/file", {
@@ -223,7 +277,9 @@ export function BulkTriageWorkbench({
     } catch (e) {
       updateRow(index, {
         kind: "error",
-        message: e instanceof Error ? e.message : String(e),
+        message: humanizeError(e, "file"),
+        phase: "file",
+        retries: (retries ?? 0) + 1,
       });
     }
   }
@@ -273,10 +329,11 @@ export function BulkTriageWorkbench({
 
   const okCount = rows?.filter((r) => r.parsed.status === "ok").length ?? 0;
   const llmCount = rows?.filter((r) => r.parsed.status === "needs-llm-format").length ?? 0;
-  const errCount = rows?.filter((r) => r.parsed.status === "error").length ?? 0;
+  const parseErrCount = rows?.filter((r) => r.parsed.status === "error").length ?? 0;
   const queuedCount = rows?.filter((r) => r.state.kind === "queued" && r.parsed.status !== "error").length ?? 0;
   const analyzedCount = rows?.filter((r) => r.state.kind === "analyzed").length ?? 0;
   const filedCount = rows?.filter((r) => r.state.kind === "filed").length ?? 0;
+  const failedCount = rows?.filter((r) => r.state.kind === "error").length ?? 0;
   const totalReady = okCount + llmCount;
 
   const apolloHeader = computeApolloHeader({
@@ -286,6 +343,7 @@ export function BulkTriageWorkbench({
     queuedCount,
     analyzedCount,
     filedCount,
+    failedCount,
     totalReady,
     parseError,
   });
@@ -433,10 +491,10 @@ export function BulkTriageWorkbench({
             <div style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: "var(--text-2)" }}>
               <strong style={{ color: "var(--text-1)" }}>{rows.length}</strong> files ·{" "}
               <span style={{ color: "var(--success)" }}>{totalReady} ready</span>
-              {errCount > 0 && (
+              {parseErrCount > 0 && (
                 <>
                   {" · "}
-                  <span style={{ color: "var(--accent)" }}>{errCount} skipped</span>
+                  <span style={{ color: "var(--text-3)" }}>{parseErrCount} skipped</span>
                 </>
               )}
               {analyzedCount > 0 && (
@@ -451,6 +509,12 @@ export function BulkTriageWorkbench({
                   <span style={{ color: "var(--success)" }}>{filedCount} filed</span>
                 </>
               )}
+              {failedCount > 0 && (
+                <>
+                  {" · "}
+                  <span style={{ color: "var(--accent)" }}>{failedCount} failed</span>
+                </>
+              )}
             </div>
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
@@ -463,6 +527,17 @@ export function BulkTriageWorkbench({
               >
                 Discard
               </button>
+              {failedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={retryAllFailed}
+                  disabled={analyzing || filing}
+                  className="btn btn-ghost"
+                  style={{ height: 32, padding: "0 12px", fontSize: 12 }}
+                >
+                  Retry {failedCount} failed
+                </button>
+              )}
               {analyzedCount > 0 && (
                 <button
                   type="button"
@@ -504,6 +579,7 @@ export function BulkTriageWorkbench({
                 disabled={analyzing || filing}
                 onReassign={(peerId) => reassignRow(i, peerId)}
                 onFile={() => fileRow(i)}
+                onRetry={() => analyzeOne(i)}
               />
             ))}
           </div>
@@ -519,12 +595,14 @@ function FileRow({
   disabled,
   onReassign,
   onFile,
+  onRetry,
 }: {
   row: Row;
   peers: Peer[];
   disabled: boolean;
   onReassign: (peerId: string) => void;
   onFile: () => void;
+  onRetry: () => void;
 }) {
   const isError = row.parsed.status === "error";
   const headerLine =
@@ -592,7 +670,7 @@ function FileRow({
             </div>
           )}
         </div>
-        <RowStatus state={row.state} />
+        <RowStatus state={row.state} onRetry={onRetry} disabled={disabled} />
       </div>
 
       {row.state.kind === "analyzed" && (
@@ -717,7 +795,15 @@ function SeverityChip({ severity }: { severity: number }) {
   );
 }
 
-function RowStatus({ state }: { state: RowState }) {
+function RowStatus({
+  state,
+  onRetry,
+  disabled,
+}: {
+  state: RowState;
+  onRetry: () => void;
+  disabled: boolean;
+}) {
   if (state.kind === "queued") {
     return (
       <span
@@ -745,26 +831,52 @@ function RowStatus({ state }: { state: RowState }) {
         }}
       >
         <Spinner /> {state.stage}
+        {state.retry && (
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--text-3)",
+              fontStyle: "italic",
+            }}
+          >
+            · retry {state.retry.attempt} on {modelLabel(state.retry.model)}
+          </span>
+        )}
       </span>
     );
   }
   if (state.kind === "analyzed") {
     return (
-      <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: 10.5,
-          padding: "3px 8px",
-          background: "var(--accent-soft)",
-          color: "var(--accent)",
-          border: "1px solid var(--accent)",
-          borderRadius: 4,
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          fontWeight: 700,
-        }}
-      >
-        ready to file
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        {state.retries > 0 && (
+          <span
+            title={`Recovered after ${state.retries} ${state.retries === 1 ? "retry" : "retries"}`}
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              color: "var(--text-3)",
+              fontStyle: "italic",
+            }}
+          >
+            ↻ {state.retries}
+          </span>
+        )}
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 10.5,
+            padding: "3px 8px",
+            background: "var(--accent-soft)",
+            color: "var(--accent)",
+            border: "1px solid var(--accent)",
+            borderRadius: 4,
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
+            fontWeight: 700,
+          }}
+        >
+          ready to file
+        </span>
       </span>
     );
   }
@@ -797,18 +909,65 @@ function RowStatus({ state }: { state: RowState }) {
       </Link>
     );
   }
+  // error
   return (
-    <span
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: "var(--accent)",
-      }}
-      title={state.message}
-    >
-      ✕ {state.message.slice(0, 60)}
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <span
+        title={state.message}
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          color: "var(--accent)",
+          maxWidth: 220,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        ✕ {state.message}
+      </span>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={disabled}
+        className="btn btn-ghost"
+        style={{ height: 26, padding: "0 8px", fontSize: 11 }}
+      >
+        Retry
+      </button>
     </span>
   );
+}
+
+function modelLabel(model: string): string {
+  if (model.includes("opus")) return "Opus";
+  if (model.includes("haiku")) return "Haiku";
+  if (model.includes("sonnet")) return "Sonnet";
+  return model;
+}
+
+/**
+ * Turn the model error into a one-liner the operator can act on.
+ * Zod's full dump is too noisy and full of paths nobody cares about.
+ */
+function humanizeError(err: unknown, stage: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (!raw) return `${stage} failed`;
+
+  // Common Anthropic patterns.
+  if (/overloaded|529/i.test(raw)) return `${stage}: Anthropic overloaded — retry`;
+  if (/rate.?limit|429/i.test(raw)) return `${stage}: rate-limited — retry`;
+  if (/timeout|timed out|ETIMEDOUT/i.test(raw)) return `${stage}: timed out — retry`;
+  if (/ECONNRESET|fetch failed|network/i.test(raw)) return `${stage}: network blip — retry`;
+
+  // Zod issues come through as JSON arrays — pull the first message.
+  if (raw.startsWith("[") || raw.includes("invalid_type")) {
+    const m = raw.match(/"message"\s*:\s*"([^"]+)"/);
+    if (m) return `${stage}: schema mismatch — ${m[1]}`;
+    return `${stage}: schema mismatch`;
+  }
+
+  return `${stage}: ${raw.slice(0, 80)}`;
 }
 
 function Spinner() {
@@ -855,6 +1014,7 @@ function computeApolloHeader({
   queuedCount,
   analyzedCount,
   filedCount,
+  failedCount,
   totalReady,
   parseError,
 }: {
@@ -864,6 +1024,7 @@ function computeApolloHeader({
   queuedCount: number;
   analyzedCount: number;
   filedCount: number;
+  failedCount: number;
   totalReady: number;
   parseError: string | null;
 }): string {
@@ -872,16 +1033,17 @@ function computeApolloHeader({
     return "Drop a corpus and I'll triage each thread, then tell you who on the bench should sign each one off.";
   }
   if (analyzing) {
-    return "Reading through them now. I'll surface a recommendation as each one finishes.";
+    return "Reading through them now. If a thread trips on validation I'll re-prompt and, if needed, escalate to Opus 4.7.";
   }
-  if (filing) {
-    return "Filing the approved cases.";
+  if (filing) return "Filing the approved cases.";
+  if (failedCount > 0 && queuedCount === 0 && analyzedCount === 0) {
+    return `${failedCount} ${failedCount === 1 ? "thread" : "threads"} broke. Retry them when you're ready — the retries pull in Opus on the second swing.`;
   }
-  if (filedCount === rows.length) {
-    return "All filed. The peers will see them in their inboxes.";
-  }
+  if (filedCount === rows.length) return "All filed. The peers will see them in their inboxes.";
   if (analyzedCount > 0 && queuedCount === 0) {
-    return "Analyzed. Override any assignment that doesn't look right, then file.";
+    return failedCount > 0
+      ? `${analyzedCount} ready to file, ${failedCount} stuck — retry the broken ones or move on without them.`
+      : "Analyzed. Override any assignment that doesn't look right, then file.";
   }
   if (queuedCount > 0) {
     return `${totalReady} ${totalReady === 1 ? "thread" : "threads"} parsed. Run analysis when you're ready.`;

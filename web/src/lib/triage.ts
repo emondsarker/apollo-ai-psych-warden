@@ -18,11 +18,17 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { ConversationTurn, SeverityLevel } from "./types";
 
 export const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+export const OPUS_MODEL = "claude-opus-4-7";
 
 let _client: Anthropic | null = null;
 export function getHaiku(): Anthropic {
   if (!_client) _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   return _client;
+}
+
+/** Same client; the name is kept for legibility at call sites. */
+export function getAnthropic(): Anthropic {
+  return getHaiku();
 }
 
 // ─── Canonical thread shape ──────────────────────────────────────────────────
@@ -456,34 +462,177 @@ export async function toolJson<T>(
   userPrompt: string,
   maxTokens: number,
 ): Promise<T> {
+  return toolJsonRetry(schema, toolName, toolDescription, system, userPrompt, maxTokens);
+}
+
+export type ToolJsonAttempt = {
+  index: number; // 0-based
+  reason: "transient" | "validation" | "tool-missing";
+  modelUsed: string;
+  errorPreview: string;
+};
+
+export interface ToolJsonOptions {
+  /** Anthropic model id. Defaults to Haiku. */
+  model?: string;
+  /** Total attempts past the first try. Default 2 (so up to 3 calls). */
+  retries?: number;
+  /** If true, the final attempt upgrades to Opus 4.7 even if {model} is Haiku. */
+  opusOnFinalAttempt?: boolean;
+  /** Observability hook fired on every retry. */
+  onAttempt?: (info: ToolJsonAttempt) => void;
+}
+
+/**
+ * Same shape as toolJson, with explicit retry policy.
+ *
+ * Retry triggers:
+ *   - Zod validation error (model emitted a wrong-shaped object)
+ *   - Tool-use missing (model decided not to call the forced tool)
+ *   - Transient API error (HTTP 429, HTTP 5xx, network reset, timeout)
+ *
+ * On validation/tool-missing failures we re-prompt with the error message
+ * appended so the model knows what to fix. By default the very last attempt
+ * upgrades to Opus 4.7 — Opus is much less likely to get the schema wrong on
+ * the gnarly nested ones (failure-timeline, undertones).
+ */
+export async function toolJsonRetry<T>(
+  schema: z.ZodType<T>,
+  toolName: string,
+  toolDescription: string,
+  system: string,
+  userPrompt: string,
+  maxTokens: number,
+  options: ToolJsonOptions = {},
+): Promise<T> {
+  const {
+    model = HAIKU_MODEL,
+    retries = 2,
+    opusOnFinalAttempt = true,
+    onAttempt,
+  } = options;
+
   const inputSchema = z.toJSONSchema(schema, { target: "draft-7" });
-  // Anthropic requires the top-level input_schema to be {type: "object", ...}.
   if ((inputSchema as { type?: string }).type !== "object") {
-    throw new Error(`tool input_schema must be object, got ${(inputSchema as { type?: string }).type}`);
+    throw new Error(
+      `tool input_schema must be object, got ${(inputSchema as { type?: string }).type}`,
+    );
   }
-  // Drop $schema — Anthropic's validator chokes on it.
   if ("$schema" in (inputSchema as Record<string, unknown>)) {
     delete (inputSchema as Record<string, unknown>).$schema;
   }
-  const response = await getHaiku().messages.create({
-    model: HAIKU_MODEL,
-    max_tokens: maxTokens,
-    system,
-    tools: [
-      {
-        name: toolName,
-        description: toolDescription,
-        input_schema: inputSchema as Anthropic.Messages.Tool["input_schema"],
-      },
-    ],
-    tool_choice: { type: "tool", name: toolName },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-  const toolUse = response.content.find((b) => b.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error("Model did not call the required tool");
+  const tool: Anthropic.Messages.Tool = {
+    name: toolName,
+    description: toolDescription,
+    input_schema: inputSchema as Anthropic.Messages.Tool["input_schema"],
+  };
+
+  const totalAttempts = retries + 1;
+  let prompt = userPrompt;
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt < totalAttempts; attempt++) {
+    const isFinal = attempt === totalAttempts - 1;
+    const modelUsed = opusOnFinalAttempt && isFinal ? OPUS_MODEL : model;
+
+    try {
+      const response = await getAnthropic().messages.create({
+        model: modelUsed,
+        max_tokens: maxTokens,
+        system,
+        tools: [tool],
+        tool_choice: { type: "tool", name: toolName },
+        messages: [{ role: "user", content: prompt }],
+      });
+      const toolUse = response.content.find((b) => b.type === "tool_use");
+      if (!toolUse || toolUse.type !== "tool_use") {
+        const err = new Error("Model did not call the required tool");
+        lastErr = err;
+        if (isFinal) throw err;
+        onAttempt?.({
+          index: attempt,
+          reason: "tool-missing",
+          modelUsed,
+          errorPreview: err.message,
+        });
+        continue;
+      }
+      const parsed = schema.safeParse(toolUse.input);
+      if (parsed.success) return parsed.data;
+
+      // Validation failed — feed the issue back to the next attempt.
+      const issues = parsed.error.issues
+        .slice(0, 5)
+        .map((i) => `  • ${i.path.join(".") || "(root)"} — ${i.message}`)
+        .join("\n");
+      lastErr = parsed.error;
+      if (isFinal) throw parsed.error;
+      onAttempt?.({
+        index: attempt,
+        reason: "validation",
+        modelUsed,
+        errorPreview: issues.split("\n")[0]?.trim() ?? "schema mismatch",
+      });
+      prompt = `${userPrompt}
+
+—— PREVIOUS ATTEMPT FAILED SCHEMA VALIDATION ——
+${issues}
+
+Re-emit the tool call honoring the schema exactly. Pay attention to:
+- field types (strings vs arrays of strings)
+- required fields
+- enum values
+Do not include any extra commentary; emit only the corrected tool call.`;
+    } catch (err) {
+      lastErr = err;
+      if (isFinal) throw err;
+      if (isTransient(err)) {
+        onAttempt?.({
+          index: attempt,
+          reason: "transient",
+          modelUsed,
+          errorPreview: previewError(err),
+        });
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      // Validation or unknown error — surface immediately on non-final;
+      // we already handled validation above via safeParse, so this catch
+      // block fires for unexpected throws (e.g. SDK serialisation issues).
+      throw err;
+    }
   }
-  return schema.parse(toolUse.input);
+
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+function isTransient(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { status?: number; code?: string; message?: string };
+  if (typeof e.status === "number" && (e.status === 408 || e.status === 429 || e.status >= 500)) {
+    return true;
+  }
+  if (e.code === "ECONNRESET" || e.code === "ETIMEDOUT" || e.code === "EAI_AGAIN") {
+    return true;
+  }
+  if (e.message && /(timeout|rate.?limit|temporarily|try.again|overloaded|503|529)/i.test(e.message)) {
+    return true;
+  }
+  return false;
+}
+
+function backoffMs(attempt: number): number {
+  // 600ms, 1.6s, 3.6s — bounded to avoid leaving the route hanging too long.
+  return Math.min(4000, 600 * Math.pow(2, attempt));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+function previewError(err: unknown): string {
+  if (err instanceof Error) return err.message.slice(0, 120);
+  return String(err).slice(0, 120);
 }
 
 export function extractJson(text: string): string {

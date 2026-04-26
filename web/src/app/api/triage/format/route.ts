@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   FORMAT_SYSTEM,
   TriageThreadSchema,
-  toolJson,
+  toolJsonRetry,
 } from "@/lib/triage";
 
 const RequestSchema = z.object({
@@ -20,13 +20,14 @@ export async function POST(req: NextRequest) {
       ? `Context the user provided: ${context}\n\n—— RAW THREAD ——\n${raw}`
       : raw;
 
-    const thread = await toolJson(
+    const thread = await toolJsonRetry(
       TriageThreadSchema,
       "emit_canonical_thread",
       "Emit the parsed conversation as a canonical TriageThread JSON object.",
       FORMAT_SYSTEM,
       userPrompt,
       8000,
+      { retries: 2 },
     );
     return Response.json({ thread });
   } catch (err) {

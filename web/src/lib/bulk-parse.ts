@@ -50,6 +50,23 @@ const SUPPORTED_EXT = new Set([
   "csv",
 ]);
 
+// Filenames that are clearly project metadata, not conversations. Skip them
+// before we waste an LLM round-trip trying to triage a README.
+const SKIP_BASENAMES = new Set([
+  "readme",
+  "license",
+  "licence",
+  "changelog",
+  "contributing",
+  "code_of_conduct",
+  "security",
+  "notice",
+  "authors",
+  "copyright",
+  "manifest",
+  "package",
+]);
+
 const MAX_FILES = 200;
 const MAX_BYTES_PER_FILE = 800_000;
 
@@ -65,6 +82,9 @@ export async function parseZipBuffer(buf: ArrayBuffer): Promise<ParsedFile[]> {
     if (base.startsWith(".")) continue;
     const ext = (base.split(".").pop() ?? "").toLowerCase();
     if (!SUPPORTED_EXT.has(ext)) continue;
+    // Skip project metadata files masquerading as conversations.
+    const stem = base.replace(/\.[^.]+$/, "").toLowerCase();
+    if (SKIP_BASENAMES.has(stem)) continue;
 
     try {
       const text = await file.async("text");
